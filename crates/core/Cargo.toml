@@ -7,3 +7,4 @@ description = "Core library for ChessVault: PGN and ChessBase database import, s
 
 [dependencies]
 cbvault = "0.1.6"
+rusqlite = { version = "0.32", features = ["bundled"] }

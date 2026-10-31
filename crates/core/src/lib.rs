@@ -1,6 +1,7 @@
 //! ChessVault core library. No UI code lives here.
 
 pub mod convert;
+pub mod db;
 
 /// Returns the crate version, used by the CLI and app to report their build.
 pub fn version() -> &'static str {
