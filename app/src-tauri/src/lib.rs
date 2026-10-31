@@ -1,15 +1,20 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chessvault_core::db::{self, Game, GameSummary, Store};
+use chessvault_core::engine::{Engine, EngineLine};
+use chessvault_core::online::lichess::{self, Database, Explorer};
 use chessvault_core::validate::{self, Step};
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
-/// The database currently open in the app, if any.
 #[derive(Default)]
 struct AppState {
+    /// The database currently open, if any.
     store: Mutex<Option<Store>>,
+    /// The running engine and the path it was started from.
+    engine: Mutex<Option<(PathBuf, Engine)>>,
+    lichess: lichess::Client,
 }
 
 /// Runs `f` against the open database, or fails if none is open.
@@ -82,6 +87,71 @@ fn undo_game(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     with_store(&state, |store| store.undo(id).map_err(|e| e.to_string()))
 }
 
+/// Analyzes `fen`, starting the engine at `engine_path` if it isn't running.
+/// Lines arrive as `engine-line` events.
+#[tauri::command]
+fn start_analysis(engine_path: String, fen: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let path = PathBuf::from(engine_path.trim().trim_matches('"'));
+    let mut slot = state.engine.lock().map_err(|e| e.to_string())?;
+    if slot.as_ref().is_none_or(|(running, _)| *running != path) {
+        *slot = None;
+        let engine = Engine::start(&path, move |line: EngineLine| {
+            let _ = app.emit("engine-line", line);
+        })
+        .map_err(|e| format!("could not start the engine at {}: {e}", path.display()))?;
+        *slot = Some((path, engine));
+    }
+    let (_, engine) = slot.as_mut().expect("the engine is running");
+    if let Err(e) = engine.analyze(&fen) {
+        // The engine process has gone; start a fresh one next time.
+        *slot = None;
+        return Err(format!("the engine stopped responding: {e}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_analysis(state: State<'_, AppState>) -> Result<(), String> {
+    let mut slot = state.engine.lock().map_err(|e| e.to_string())?;
+    if let Some((_, engine)) = slot.as_mut() {
+        engine.stop().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Where the Lichess token is kept: a file in the app's config folder on this computer.
+fn token_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join("lichess-token"))
+}
+
+/// Saves the Lichess token, or removes it when `token` is empty.
+#[tauri::command]
+fn set_lichess_token(token: String, app: AppHandle) -> Result<(), String> {
+    let path = token_path(&app)?;
+    let token = token.trim();
+    if token.is_empty() {
+        let _ = fs::remove_file(&path);
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    fs::write(&path, token).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn has_lichess_token(app: AppHandle) -> Result<bool, String> {
+    Ok(token_path(&app)?.exists())
+}
+
+#[tauri::command]
+async fn explore(database: Database, fen: String, app: AppHandle, state: State<'_, AppState>) -> Result<Explorer, String> {
+    let token = fs::read_to_string(token_path(&app)?).unwrap_or_default();
+    let client = state.lichess.clone();
+    client.explore(database, &fen, &token).await.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -95,7 +165,12 @@ pub fn run() {
             get_game,
             game_steps,
             save_game,
-            undo_game
+            undo_game,
+            start_analysis,
+            stop_analysis,
+            set_lichess_token,
+            has_lichess_token,
+            explore
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

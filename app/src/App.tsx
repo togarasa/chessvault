@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Board } from "./Board";
+import { EnginePanel } from "./EnginePanel";
+import { ExplorerPanel } from "./ExplorerPanel";
 import "./App.css";
 
 type GameSummary = {
@@ -123,6 +125,8 @@ function App() {
     });
   }
 
+  const fen = steps[ply]?.fen ?? START_FEN;
+
   return (
     <div className="app">
       <header className="toolbar">
@@ -199,7 +203,8 @@ function App() {
                 {selected.white} – {selected.black}
               </h2>
               <div className="gameview">
-                <Board fen={steps[ply]?.fen ?? START_FEN} />
+                <div className="boardcol">
+                <Board fen={fen} />
                 <div className="controls">
                   <button onClick={() => setPly(0)} disabled={ply === 0}>
                     |&lt;
@@ -227,6 +232,11 @@ function App() {
                       {moveLabel(i + 1, step.san)}
                     </button>
                   ))}
+                </div>
+                </div>
+                <div className="sidecol">
+                  <EnginePanel fen={fen} />
+                  <ExplorerPanel fen={fen} />
                 </div>
               </div>
               <textarea value={draft} onChange={(e) => setDraft(e.currentTarget.value)} spellCheck={false} />

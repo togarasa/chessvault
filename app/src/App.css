@@ -75,7 +75,7 @@ button:disabled {
 
 .panes {
   display: grid;
-  grid-template-columns: 3fr 2fr;
+  grid-template-columns: minmax(320px, 2fr) 3fr;
   flex: 1;
   min-height: 0;
 }
@@ -114,6 +114,7 @@ tbody tr.active {
 }
 
 .game {
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -152,9 +153,10 @@ tbody tr.active {
 }
 
 .gameview {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(260px, 1fr);
+  gap: 12px;
+  align-items: start;
 }
 
 .board {
@@ -185,4 +187,119 @@ tbody tr.active {
 .moves button.active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+.boardcol,
+.sidecol {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel-head,
+.panel .row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-head .path,
+.panel .row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel .muted {
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+}
+
+.error {
+  margin: 0;
+  color: #c0392b;
+  font-size: 12px;
+}
+
+.engine-line {
+  display: flex;
+  gap: 8px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.engine-line .score {
+  min-width: 52px;
+  font-weight: 600;
+}
+
+.engine-line .depth {
+  color: var(--muted);
+  min-width: 28px;
+}
+
+.engine-line .pv {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opening {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+table.explorer td,
+table.explorer th {
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+table.explorer td:nth-child(3) {
+  width: 55%;
+}
+
+table.explorer tr.total td {
+  font-weight: 600;
+}
+
+.result-bar {
+  display: flex;
+  height: 16px;
+  border-radius: 3px;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.result-bar span {
+  text-align: center;
+  overflow: hidden;
+}
+
+.result-bar .w {
+  background: #f2f2f2;
+  color: #222;
+}
+
+.result-bar .d {
+  background: #9a9a9a;
+  color: #fff;
+}
+
+.result-bar .b {
+  background: #333;
+  color: #eee;
 }
