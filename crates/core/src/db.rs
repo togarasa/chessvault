@@ -64,7 +64,7 @@ impl From<rusqlite::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A game as shown in lists and search results.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct GameSummary {
     pub id: i64,
     pub event: String,
@@ -75,7 +75,7 @@ pub struct GameSummary {
 }
 
 /// A full game, including its PGN text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Game {
     pub id: i64,
     pub event: String,
