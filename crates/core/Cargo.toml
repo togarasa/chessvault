@@ -1,0 +1,9 @@
+[package]
+name = "chessvault-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core library for ChessVault: PGN and ChessBase database import, storage and engine access"
+
+[dependencies]
+cbvault = "0.1.6"
