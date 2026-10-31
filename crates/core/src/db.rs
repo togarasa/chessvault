@@ -2,10 +2,11 @@
 //! every edit saves the previous version so it can be undone.
 
 use std::fmt;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Transaction};
 
 use crate::validate;
 
@@ -41,14 +42,22 @@ const INSERT_GAME: &str = "INSERT INTO games (event, site, date, round, white, b
 #[derive(Debug)]
 pub enum Error {
     Sql(rusqlite::Error),
+    Io(std::io::Error),
     InvalidGame(String),
+    NotADatabase(PathBuf),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Sql(e) => write!(f, "database error: {e}"),
+            Error::Io(e) => write!(f, "{e}"),
             Error::InvalidGame(msg) => write!(f, "invalid game: {msg}"),
+            Error::NotADatabase(path) => write!(
+                f,
+                "{} is not a ChessVault database; open a .sqlite database or a .pgn file",
+                path.display()
+            ),
         }
     }
 }
@@ -58,6 +67,52 @@ impl std::error::Error for Error {}
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
         Error::Sql(e)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Io(e)
+    }
+}
+
+/// A database opened by [`open_path`].
+pub struct Opened {
+    pub store: Store,
+    /// The database file that was opened or created.
+    pub path: PathBuf,
+    /// Games imported from a PGN file; 0 when an existing database was opened.
+    pub imported: usize,
+}
+
+/// Opens `path` as a database. For a `.pgn` file, opens the database beside it
+/// with the same name and a `.sqlite` extension, and imports the file's games
+/// the first time, so opening the same PGN again doesn't duplicate them.
+pub fn open_path(path: &Path) -> Result<Opened> {
+    let is_pgn = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pgn"));
+    if !is_pgn {
+        let store = Store::open(path)?;
+        return Ok(Opened { store, path: path.to_path_buf(), imported: 0 });
+    }
+    let db_path = path.with_extension("sqlite");
+    let existed = db_path.exists();
+    let mut store = Store::open(&db_path)?;
+    if store.count()? > 0 {
+        return Ok(Opened { store, path: db_path, imported: 0 });
+    }
+    let imported = fs::read_to_string(path)
+        .map_err(Error::from)
+        .and_then(|text| store.import_pgn(&text));
+    match imported {
+        Ok(imported) => Ok(Opened { store, path: db_path, imported }),
+        Err(e) => {
+            // Don't leave an empty database behind for a PGN that failed to import.
+            drop(store);
+            if !existed {
+                let _ = fs::remove_file(&db_path);
+            }
+            Err(e)
+        }
     }
 }
 
@@ -94,7 +149,14 @@ pub struct Store {
 impl Store {
     /// Opens or creates the database file at `path`.
     pub fn open(path: &Path) -> Result<Self> {
-        Self::from_connection(Connection::open(path)?)
+        Self::from_connection(Connection::open(path)?).map_err(|e| match e {
+            Error::Sql(rusqlite::Error::SqliteFailure(failure, _))
+                if failure.code == ErrorCode::NotADatabase =>
+            {
+                Error::NotADatabase(path.to_path_buf())
+            }
+            other => other,
+        })
     }
 
     /// Opens a throwaway in-memory database, for tests.
@@ -365,6 +427,54 @@ mod tests {
         let id = store.list(10, 0).unwrap()[0].id;
         let two = format!("{GAME_1}\n{GAME_2}");
         assert!(store.update_pgn(id, &two).is_err());
+    }
+
+    /// A fresh, empty directory for one test.
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("chessvault-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn opening_a_pgn_creates_a_database_beside_it_once() {
+        let dir = temp_dir("open-pgn");
+        let pgn = dir.join("games.pgn");
+        fs::write(&pgn, format!("{GAME_1}\n{GAME_2}")).unwrap();
+
+        let first = open_path(&pgn).unwrap();
+        assert_eq!(first.path, dir.join("games.sqlite"));
+        assert_eq!(first.imported, 2);
+        drop(first);
+
+        let again = open_path(&pgn).unwrap();
+        assert_eq!(again.imported, 0);
+        assert_eq!(again.store.count().unwrap(), 2);
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_pgn_that_fails_to_import_leaves_no_database() {
+        let dir = temp_dir("bad-pgn");
+        let pgn = dir.join("bad.pgn");
+        fs::write(&pgn, "[Event \"Bad\"]\n\n1. e4 e5 2. Ke3 *\n").unwrap();
+        assert!(open_path(&pgn).is_err());
+        assert!(!dir.join("bad.sqlite").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_database_gets_a_clear_error() {
+        let dir = temp_dir("not-db");
+        let file = dir.join("notes.txt");
+        fs::write(&file, "These are notes, not a SQLite database file.").unwrap();
+        match Store::open(&file) {
+            Err(Error::NotADatabase(path)) => assert_eq!(path, file),
+            other => panic!("unexpected result: {:?}", other.err()),
+        }
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

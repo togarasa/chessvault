@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Board } from "./Board";
 import "./App.css";
 
 type GameSummary = {
@@ -13,7 +14,20 @@ type GameSummary = {
 
 type Game = GameSummary & { pgn: string };
 
+/// What opening a file did: the database used, its games, and how many were just imported.
+type OpenResult = { database: string; games: number; imported: number };
+
+/// One position on the main line. `san` is empty for the start position.
+type Step = { san: string; fen: string };
+
 const PAGE_SIZE = 200;
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+/// Move label for step `n`, where step 1 is White's first move.
+function moveLabel(n: number, san: string) {
+  const moveNumber = Math.ceil(n / 2);
+  return n % 2 === 1 ? `${moveNumber}. ${san}` : `${moveNumber}... ${san}`;
+}
 
 function App() {
   const [dbPath, setDbPath] = useState("");
@@ -21,9 +35,23 @@ function App() {
   const [search, setSearch] = useState("");
   const [games, setGames] = useState<GameSummary[]>([]);
   const [selected, setSelected] = useState<Game | null>(null);
+  const [steps, setSteps] = useState<Step[]>([]);
+  const [ply, setPly] = useState(0);
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("Open a database to begin.");
   const [isOpen, setIsOpen] = useState(false);
+
+  // Arrow keys step through the moves, unless the user is typing.
+  useEffect(() => {
+    if (!selected) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+      if (e.key === "ArrowRight") setPly((p) => Math.min(p + 1, steps.length - 1));
+      if (e.key === "ArrowLeft") setPly((p) => Math.max(p - 1, 0));
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, steps.length]);
 
   async function run(action: () => Promise<void>) {
     try {
@@ -35,9 +63,14 @@ function App() {
 
   async function openDatabase() {
     await run(async () => {
-      const count = await invoke<number>("open_database", { path: dbPath });
+      const opened = await invoke<OpenResult>("open_database", { path: dbPath.trim().replace(/^"|"$/g, "") });
       setIsOpen(true);
-      setStatus(`Opened ${dbPath} (${count} games).`);
+      setSelected(null);
+      setStatus(
+        opened.imported > 0
+          ? `Imported ${opened.imported} games into ${opened.database}.`
+          : `Opened ${opened.database} (${opened.games} games).`,
+      );
       await loadGames();
     });
   }
@@ -59,9 +92,14 @@ function App() {
 
   async function select(id: number) {
     await run(async () => {
-      const game = await invoke<Game | null>("get_game", { id });
+      const [game, found] = await Promise.all([
+        invoke<Game | null>("get_game", { id }),
+        invoke<Step[]>("game_steps", { id }),
+      ]);
       setSelected(game);
       setDraft(game?.pgn ?? "");
+      setSteps(found);
+      setPly(0);
     });
   }
 
@@ -90,7 +128,7 @@ function App() {
       <header className="toolbar">
         <input
           className="path"
-          placeholder="Database file, e.g. C:\chess\chessvault.sqlite"
+          placeholder="Open a .pgn file or a .sqlite database"
           value={dbPath}
           onChange={(e) => setDbPath(e.currentTarget.value)}
         />
@@ -160,6 +198,37 @@ function App() {
               <h2>
                 {selected.white} – {selected.black}
               </h2>
+              <div className="gameview">
+                <Board fen={steps[ply]?.fen ?? START_FEN} />
+                <div className="controls">
+                  <button onClick={() => setPly(0)} disabled={ply === 0}>
+                    |&lt;
+                  </button>
+                  <button onClick={() => setPly((p) => Math.max(p - 1, 0))} disabled={ply === 0}>
+                    &lt;
+                  </button>
+                  <button
+                    onClick={() => setPly((p) => Math.min(p + 1, steps.length - 1))}
+                    disabled={ply >= steps.length - 1}
+                  >
+                    &gt;
+                  </button>
+                  <button onClick={() => setPly(steps.length - 1)} disabled={ply >= steps.length - 1}>
+                    &gt;|
+                  </button>
+                </div>
+                <div className="moves">
+                  {steps.slice(1).map((step, i) => (
+                    <button
+                      key={i + 1}
+                      className={ply === i + 1 ? "active" : ""}
+                      onClick={() => setPly(i + 1)}
+                    >
+                      {moveLabel(i + 1, step.san)}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <textarea value={draft} onChange={(e) => setDraft(e.currentTarget.value)} spellCheck={false} />
               <div className="actions">
                 <button onClick={save} disabled={draft === selected.pgn}>
@@ -169,7 +238,7 @@ function App() {
               </div>
             </>
           ) : (
-            <p className="muted">Select a game to view and edit its PGN.</p>
+            <p className="muted">Select a game to view it and edit its PGN.</p>
           )}
         </section>
       </div>

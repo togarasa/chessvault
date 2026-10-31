@@ -2,7 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
-use chessvault_core::db::{Game, GameSummary, Store};
+use chessvault_core::db::{self, Game, GameSummary, Store};
+use chessvault_core::validate::{self, Step};
 use tauri::State;
 
 /// The database currently open in the app, if any.
@@ -21,12 +22,22 @@ fn with_store<T>(
     f(store)
 }
 
+/// What opening a file did, for the status bar.
+#[derive(serde::Serialize)]
+struct OpenResult {
+    database: String,
+    games: i64,
+    imported: usize,
+}
+
+/// Opens a database, or a PGN file through a database beside it.
 #[tauri::command]
-fn open_database(path: String, state: State<'_, AppState>) -> Result<i64, String> {
-    let store = Store::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let count = store.count().map_err(|e| e.to_string())?;
-    *state.store.lock().map_err(|e| e.to_string())? = Some(store);
-    Ok(count)
+fn open_database(path: String, state: State<'_, AppState>) -> Result<OpenResult, String> {
+    let opened = db::open_path(Path::new(&path)).map_err(|e| e.to_string())?;
+    let games = opened.store.count().map_err(|e| e.to_string())?;
+    let database = opened.path.display().to_string();
+    *state.store.lock().map_err(|e| e.to_string())? = Some(opened.store);
+    Ok(OpenResult { database, games, imported: opened.imported })
 }
 
 #[tauri::command]
@@ -51,6 +62,17 @@ fn get_game(id: i64, state: State<'_, AppState>) -> Result<Option<Game>, String>
 }
 
 #[tauri::command]
+fn game_steps(id: i64, state: State<'_, AppState>) -> Result<Vec<Step>, String> {
+    with_store(&state, |store| {
+        let game = store
+            .get(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no game with id {id}"))?;
+        validate::main_line(&game.pgn)
+    })
+}
+
+#[tauri::command]
 fn save_game(id: i64, pgn: String, state: State<'_, AppState>) -> Result<(), String> {
     with_store(&state, |store| store.update_pgn(id, &pgn).map_err(|e| e.to_string()))
 }
@@ -71,6 +93,7 @@ pub fn run() {
             list_games,
             search_games,
             get_game,
+            game_steps,
             save_game,
             undo_game
         ])

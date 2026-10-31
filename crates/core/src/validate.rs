@@ -1,8 +1,18 @@
 //! Checks that a game's movetext is legal, including variations, comments and
 //! a FEN start position. Every token must parse and play, so a typo is an
-//! error instead of being skipped.
+//! error instead of being skipped. The same walk also records the main line,
+//! so a board can step through the game.
 
-use shakmaty::{fen::Fen, san::SanPlus, CastlingMode, Chess, Position};
+use serde::Serialize;
+use shakmaty::{fen::Fen, san::SanPlus, CastlingMode, Chess, EnPassantMode, Position};
+
+/// One position on the main line. The first step is the start position, with
+/// an empty `san`; each later step is the move that reached its position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Step {
+    pub san: String,
+    pub fen: String,
+}
 
 /// A line of play: the current position, plus the position before its last
 /// move, where a following `(` starts a variation.
@@ -13,7 +23,17 @@ struct Line {
 
 /// Returns an error describing the first problem in the game's movetext.
 pub fn check_movetext(pgn: &str) -> Result<(), String> {
+    walk(pgn).map(|_| ())
+}
+
+/// Returns the main line of a game, starting from the start position.
+pub fn main_line(pgn: &str) -> Result<Vec<Step>, String> {
+    walk(pgn)
+}
+
+fn walk(pgn: &str) -> Result<Vec<Step>, String> {
     let start = start_position(pgn)?;
+    let mut main = vec![Step { san: String::new(), fen: fen_of(&start) }];
     let text = movetext(pgn);
     let bytes = text.as_bytes();
     let mut lines = vec![Line { pos: start, before_last: None }];
@@ -51,14 +71,14 @@ pub fn check_movetext(pgn: &str) -> Result<(), String> {
                 while i < bytes.len() && !is_delimiter(bytes[i]) {
                     i += 1;
                 }
-                check_token(&text[begin..i], &mut lines)?;
+                check_token(&text[begin..i], &mut lines, &mut main)?;
             }
         }
     }
     if lines.len() != 1 {
         return Err("a variation '(' is never closed".to_string());
     }
-    Ok(())
+    Ok(main)
 }
 
 fn is_delimiter(b: u8) -> bool {
@@ -82,8 +102,9 @@ fn skip_line(bytes: &[u8], i: usize) -> usize {
         .map_or(bytes.len(), |offset| i + offset + 1)
 }
 
-/// Plays one movetext token: a move, a move number, or a game result.
-fn check_token(token: &str, lines: &mut [Line]) -> Result<(), String> {
+/// Plays one movetext token: a move, a move number, or a game result. A move
+/// on the main line is also recorded in `main`.
+fn check_token(token: &str, lines: &mut [Line], main: &mut Vec<Step>) -> Result<(), String> {
     if matches!(token, "*" | "1-0" | "0-1" | "1/2-1/2") {
         return Ok(());
     }
@@ -100,6 +121,7 @@ fn check_token(token: &str, lines: &mut [Line]) -> Result<(), String> {
     }
     let san = san.trim_end_matches(|c: char| c == '!' || c == '?');
     let parsed = SanPlus::from_ascii(san.as_bytes()).map_err(|_| format!("invalid move '{token}'"))?;
+    let is_main = lines.len() == 1;
     let line = lines.last_mut().expect("at least one line");
     let mv = parsed
         .san
@@ -111,7 +133,14 @@ fn check_token(token: &str, lines: &mut [Line]) -> Result<(), String> {
         .play(mv)
         .map_err(|_| format!("illegal move '{token}'"))?;
     line.before_last = Some(std::mem::replace(&mut line.pos, next));
+    if is_main {
+        main.push(Step { san: san.to_string(), fen: fen_of(&line.pos) });
+    }
     Ok(())
+}
+
+fn fen_of(pos: &Chess) -> String {
+    Fen::from_position(pos, EnPassantMode::Legal).to_string()
 }
 
 /// The position the game starts from: the FEN tag if present, else the standard start.
@@ -152,7 +181,7 @@ fn movetext(pgn: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::check_movetext;
+    use super::{check_movetext, main_line};
 
     const HEADERS: &str = "[Event \"Test\"]\n[Result \"*\"]\n\n";
 
@@ -195,5 +224,14 @@ mod tests {
         assert_eq!(check_movetext(pgn), Ok(()));
         let bad = "[Event \"Endgame\"]\n[SetUp \"1\"]\n[FEN \"4k3/8/8/8/8/8/8/4K3 w - - 0 1\"]\n\n1. e4 *\n";
         assert!(check_movetext(bad).is_err());
+    }
+
+    #[test]
+    fn main_line_skips_variations_and_records_each_position() {
+        let steps = main_line(&game("1. e4 e5 (1... c5 2. Nf3) 2. Nf3 *")).unwrap();
+        let sans: Vec<&str> = steps.iter().map(|s| s.san.as_str()).collect();
+        assert_eq!(sans, ["", "e4", "e5", "Nf3"]);
+        assert_eq!(steps[0].fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        assert_eq!(steps[1].fen, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
     }
 }
