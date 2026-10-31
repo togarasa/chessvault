@@ -6,7 +6,7 @@ members = ["crates/core", "crates/cli", "app/src-tauri"]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/YOUR-USER/chessvault"
+repository = "https://github.com/togarasa/chessvault"
 
 [profile.release]
 codegen-units = 1
