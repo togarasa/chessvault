@@ -2,7 +2,8 @@
 //! every edit saves the previous version so it can be undone.
 
 use std::fmt;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -116,6 +117,47 @@ pub fn open_path(path: &Path) -> Result<Opened> {
     }
 }
 
+/// Adds one game to the file at `path`, creating it if needed: a `.pgn` file gets the game
+/// appended, any other path is opened as a database. A PGN file's database from [`open_path`],
+/// if there is one, gets the game too so the two stay alike.
+pub fn add_game_to(path: &Path, pgn: &str) -> Result<()> {
+    let is = |ext: &str| path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext));
+    if !is("pgn") && !is("sqlite") {
+        return Err(Error::InvalidGame(format!(
+            "{} is not a .pgn or .sqlite file; games can only be saved to those",
+            path.display()
+        )));
+    }
+    let pgn = single_game(pgn)?;
+    check_game(&pgn)?;
+    if is("sqlite") {
+        Store::open(path)?.add_game(&pgn)?;
+        return Ok(());
+    }
+    let existing = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    // Leave one blank line between the last game and the new one.
+    let separator = match existing.iter().rposition(|b| !b.is_ascii_whitespace()) {
+        None => "",
+        Some(last) => match existing[last..].iter().filter(|&&b| b == b'\n').count() {
+            0 => "\n\n",
+            1 => "\n",
+            _ => "",
+        },
+    };
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
+    write!(file, "{separator}{}\n\n", pgn.trim())?;
+    file.sync_all()?;
+    let db_path = path.with_extension("sqlite");
+    if db_path.exists() {
+        Store::open(&db_path)?.add_game(&pgn)?;
+    }
+    Ok(())
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A game as shown in lists and search results.
@@ -185,6 +227,63 @@ impl Store {
         Ok(games.len())
     }
 
+    /// Adds one game and returns its id.
+    pub fn add_game(&mut self, pgn: &str) -> Result<i64> {
+        let pgn = single_game(pgn)?;
+        check_game(&pgn)?;
+        let h = Headers::from_pgn(&pgn);
+        self.conn.execute(
+            INSERT_GAME,
+            params![h.event, h.site, h.date, h.round, h.white, h.black, h.result, h.eco, pgn, now()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Writes games as PGN, separated by blank lines: the games in `ids`, or all
+    /// games when `ids` is `None`. Returns how many were written.
+    pub fn export_pgn(&self, out: &mut impl Write, ids: Option<&[i64]>) -> Result<usize> {
+        let mut stmt = self.conn.prepare("SELECT id, pgn FROM games ORDER BY id")?;
+        let mut rows = stmt.query([])?;
+        let mut written = 0;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            if ids.is_some_and(|ids| !ids.contains(&id)) {
+                continue;
+            }
+            let pgn: String = row.get(1)?;
+            write!(out, "{}\n\n", pgn.trim())?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
+    /// Exports games to the PGN file at `path`, replacing it only once all games are written.
+    pub fn export_pgn_file(&self, path: &Path, ids: Option<&[i64]>) -> Result<usize> {
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(".tmp");
+        let tmp = PathBuf::from(tmp_name);
+        let written = (|| {
+            let mut out = BufWriter::new(File::create(&tmp)?);
+            let written = self.export_pgn(&mut out, ids)?;
+            out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+            fs::rename(&tmp, path)?;
+            Ok(written)
+        })();
+        if written.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        written
+    }
+
+    /// Deletes a game and its saved versions. Returns `false` when there is no game with that id.
+    pub fn delete_game(&mut self, id: i64) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM revisions WHERE game_id = ?1", params![id])?;
+        let deleted = tx.execute("DELETE FROM games WHERE id = ?1", params![id])? > 0;
+        tx.commit()?;
+        Ok(deleted)
+    }
+
     /// Number of games in the database.
     pub fn count(&self) -> Result<i64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0))?)
@@ -199,14 +298,14 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Finds games where `name` appears as either player.
-    pub fn search_player(&self, name: &str, limit: i64) -> Result<Vec<GameSummary>> {
+    /// Finds games where `name` appears as either player, skipping the first `offset` matches.
+    pub fn search_player(&self, name: &str, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
         let pattern = format!("%{name}%");
         let mut stmt = self.conn.prepare(
             "SELECT id, event, date, white, black, result FROM games
-             WHERE white LIKE ?1 OR black LIKE ?1 ORDER BY id LIMIT ?2",
+             WHERE white LIKE ?1 OR black LIKE ?1 ORDER BY id LIMIT ?2 OFFSET ?3",
         )?;
-        let rows = stmt.query_map(params![pattern, limit], summary_row)?;
+        let rows = stmt.query_map(params![pattern, limit, offset], summary_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -396,10 +495,13 @@ mod tests {
         let text = format!("{GAME_1}\n{GAME_2}");
         assert_eq!(store.import_pgn(&text).unwrap(), 2);
         assert_eq!(store.count().unwrap(), 2);
-        let found = store.search_player("Lysenko", 10).unwrap();
+        let found = store.search_player("Lysenko", 10, 0).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].white, "Vykouk, Jan");
-        assert_eq!(store.search_player("Nobody", 10).unwrap().len(), 0);
+        assert_eq!(store.search_player("Nobody", 10, 0).unwrap().len(), 0);
+        let second_page = store.search_player("Lysenko", 1, 1).unwrap();
+        assert_eq!(second_page.len(), 1);
+        assert_eq!(second_page[0].id, found[1].id);
     }
 
     #[test]
@@ -418,6 +520,104 @@ mod tests {
         let game = store.get(id).unwrap().unwrap();
         assert_eq!(game.result, "1-0");
         assert!(!store.undo(id).unwrap());
+    }
+
+    #[test]
+    fn add_game_returns_its_id() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.import_pgn(GAME_1).unwrap();
+        // As written by the app: variations, comments and symbols.
+        let pgn = "[Event \"Training\"]\n[White \"Me\"]\n[Black \"?\"]\n[Result \"*\"]\n\n\
+                   1. e4 $1 { Best by test } ( 1. d4 d5 $2 ( 1... Nf6 ) ) 1... e5 *\n";
+        let id = store.add_game(pgn).unwrap();
+        let game = store.get(id).unwrap().unwrap();
+        assert_eq!(game.white, "Me");
+        assert_eq!(store.count().unwrap(), 2);
+        assert!(store.add_game(&format!("{GAME_1}\n{GAME_2}")).is_err());
+        assert!(store.add_game("[White \"Me\"]\n\n1. e5 *").is_err());
+    }
+
+    #[test]
+    fn export_writes_games_that_import_again() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.import_pgn(&format!("{GAME_1}\n{GAME_2}")).unwrap();
+        let ids: Vec<i64> = store.list(10, 0).unwrap().iter().map(|g| g.id).collect();
+
+        let mut all = Vec::new();
+        assert_eq!(store.export_pgn(&mut all, None).unwrap(), 2);
+        let mut copy = Store::open_in_memory().unwrap();
+        assert_eq!(copy.import_pgn(&String::from_utf8(all).unwrap()).unwrap(), 2);
+        assert_eq!(copy.get(ids[1]).unwrap().unwrap().pgn, GAME_2.trim());
+
+        let mut one = Vec::new();
+        assert_eq!(store.export_pgn(&mut one, Some(&ids[1..])).unwrap(), 1);
+        assert_eq!(String::from_utf8(one).unwrap(), format!("{}\n\n", GAME_2.trim()));
+    }
+
+    #[test]
+    fn export_to_a_file_replaces_it() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.import_pgn(GAME_1).unwrap();
+        let dir = temp_dir("export");
+        let path = dir.join("out.pgn");
+        fs::write(&path, "old").unwrap();
+        assert_eq!(store.export_pgn_file(&path, None).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&path).unwrap(), format!("{}\n\n", GAME_1.trim()));
+        assert!(!dir.join("out.pgn.tmp").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn delete_removes_the_game_and_its_history() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.import_pgn(&format!("{GAME_1}\n{GAME_2}")).unwrap();
+        let id = store.list(10, 0).unwrap()[0].id;
+        store.update_pgn(id, &GAME_1.replace("1-0", "0-1")).unwrap();
+
+        assert!(store.delete_game(id).unwrap());
+        assert!(store.get(id).unwrap().is_none());
+        assert_eq!(store.count().unwrap(), 1);
+        assert!(!store.undo(id).unwrap());
+        assert!(!store.delete_game(id).unwrap());
+    }
+
+    #[test]
+    fn add_game_to_a_pgn_file_creates_or_appends() {
+        let dir = temp_dir("add-to-pgn");
+        let one = dir.join("one.pgn");
+        add_game_to(&one, GAME_1).unwrap();
+        assert_eq!(fs::read_to_string(&one).unwrap(), format!("{}\n\n", GAME_1.trim()));
+
+        // An existing file without a trailing newline, with a database beside it from opening it.
+        let both = dir.join("both.pgn");
+        fs::write(&both, GAME_1.trim()).unwrap();
+        let crlf = dir.join("crlf.pgn");
+        fs::write(&crlf, GAME_1.replace('\n', "\r\n")).unwrap();
+        add_game_to(&crlf, GAME_2).unwrap();
+        let crlf_text = fs::read_to_string(&crlf).unwrap();
+        assert!(crlf_text.contains("1-0\r\n\n[Event"));
+        assert_eq!(Store::open_in_memory().unwrap().import_pgn(&crlf_text).unwrap(), 2);
+        open_path(&both).unwrap();
+        add_game_to(&both, GAME_2).unwrap();
+        let text = fs::read_to_string(&both).unwrap();
+        assert_eq!(text, format!("{}\n\n{}\n\n", GAME_1.trim(), GAME_2.trim()));
+        assert_eq!(Store::open(&dir.join("both.sqlite")).unwrap().count().unwrap(), 2);
+        assert_eq!(Store::open_in_memory().unwrap().import_pgn(&text).unwrap(), 2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn add_game_to_a_database_creates_it_and_refuses_other_files() {
+        let dir = temp_dir("add-to-db");
+        let db = dir.join("mine.sqlite");
+        add_game_to(&db, GAME_1).unwrap();
+        add_game_to(&db, GAME_2).unwrap();
+        assert_eq!(Store::open(&db).unwrap().count().unwrap(), 2);
+        assert!(add_game_to(&dir.join("base.cbh"), GAME_1).is_err());
+        assert!(!dir.join("base.cbh").exists());
+        assert!(add_game_to(&dir.join("bad.pgn"), "[White \"Me\"]\n\n1. e5 *").is_err());
+        assert!(!dir.join("bad.pgn").exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

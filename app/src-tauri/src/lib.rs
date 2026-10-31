@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use chessvault_core::db::{self, Game, GameSummary, Store};
 use chessvault_core::engine::{Engine, EngineLine};
 use chessvault_core::online::lichess::{self, Database, Explorer};
-use chessvault_core::validate::{self, Step};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
@@ -57,8 +56,13 @@ fn list_games(limit: i64, offset: i64, state: State<'_, AppState>) -> Result<Vec
 }
 
 #[tauri::command]
-fn search_games(player: String, limit: i64, state: State<'_, AppState>) -> Result<Vec<GameSummary>, String> {
-    with_store(&state, |store| store.search_player(&player, limit).map_err(|e| e.to_string()))
+fn search_games(
+    player: String,
+    limit: i64,
+    offset: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<GameSummary>, String> {
+    with_store(&state, |store| store.search_player(&player, limit, offset).map_err(|e| e.to_string()))
 }
 
 #[tauri::command]
@@ -66,20 +70,38 @@ fn get_game(id: i64, state: State<'_, AppState>) -> Result<Option<Game>, String>
     with_store(&state, |store| store.get(id).map_err(|e| e.to_string()))
 }
 
+/// Adds a new game and returns its id.
 #[tauri::command]
-fn game_steps(id: i64, state: State<'_, AppState>) -> Result<Vec<Step>, String> {
-    with_store(&state, |store| {
-        let game = store
-            .get(id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no game with id {id}"))?;
-        validate::main_line(&game.pgn)
-    })
+fn add_game(pgn: String, state: State<'_, AppState>) -> Result<i64, String> {
+    with_store(&state, |store| store.add_game(&pgn).map_err(|e| e.to_string()))
 }
 
 #[tauri::command]
 fn save_game(id: i64, pgn: String, state: State<'_, AppState>) -> Result<(), String> {
     with_store(&state, |store| store.update_pgn(id, &pgn).map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn delete_game(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
+    with_store(&state, |store| store.delete_game(id).map_err(|e| e.to_string()))
+}
+
+/// Adds a game to another database or PGN file, creating it if needed.
+#[tauri::command]
+fn add_game_to(path: String, pgn: String) -> Result<(), String> {
+    db::add_game_to(Path::new(path.trim().trim_matches('"')), &pgn).map_err(|e| e.to_string())
+}
+
+/// Writes games to a PGN file: the games in `ids`, or all games. Returns how many were written.
+#[tauri::command]
+fn export_pgn(path: String, ids: Option<Vec<i64>>, state: State<'_, AppState>) -> Result<usize, String> {
+    let path = PathBuf::from(path.trim().trim_matches('"'));
+    with_store(&state, |store| store.export_pgn_file(&path, ids.as_deref()).map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+fn file_exists(path: String) -> bool {
+    Path::new(path.trim().trim_matches('"')).exists()
 }
 
 #[tauri::command]
@@ -163,9 +185,13 @@ pub fn run() {
             list_games,
             search_games,
             get_game,
-            game_steps,
+            add_game,
             save_game,
             undo_game,
+            delete_game,
+            add_game_to,
+            export_pgn,
+            file_exists,
             start_analysis,
             stop_analysis,
             set_lichess_token,

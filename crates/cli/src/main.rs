@@ -57,6 +57,16 @@ enum Command {
     },
     /// Restore the version of a game from before its last edit.
     Undo { id: i64 },
+    /// Delete a game and its saved versions.
+    Delete { id: i64 },
+    /// Write games from the database to a PGN file.
+    Export {
+        /// Output PGN file.
+        output: PathBuf,
+        /// Export only these game ids (default: all games).
+        #[arg(long, value_delimiter = ',')]
+        ids: Vec<i64>,
+    },
 }
 
 fn main() {
@@ -88,7 +98,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Search { player, limit } => {
             let store = Store::open(&db)?;
-            print_summaries(&store.search_player(&player, limit)?);
+            print_summaries(&store.search_player(&player, limit, 0)?);
         }
         Command::Show { id } => {
             let store = Store::open(&db)?;
@@ -110,6 +120,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 println!("game {id} has no earlier version");
             }
+        }
+        Command::Delete { id } => {
+            let mut store = Store::open(&db)?;
+            if !store.delete_game(id)? {
+                return Err(format!("no game with id {id}").into());
+            }
+            println!("deleted game {id}");
+        }
+        Command::Export { output, ids } => {
+            let store = Store::open(&db)?;
+            let ids = (!ids.is_empty()).then_some(ids.as_slice());
+            let written = store.export_pgn_file(&output, ids)?;
+            println!("wrote {written} game{} to {}", if written == 1 { "" } else { "s" }, output.display());
         }
     }
     Ok(())

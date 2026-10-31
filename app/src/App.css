@@ -127,14 +127,6 @@ tbody tr.active {
   font-size: 16px;
 }
 
-.game textarea {
-  flex: 1;
-  min-height: 140px;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 13px;
-  resize: none;
-}
-
 .actions {
   display: flex;
   gap: 8px;
@@ -168,25 +160,6 @@ tbody tr.active {
 .controls {
   display: flex;
   gap: 4px;
-}
-
-.moves {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 120px;
-  overflow: auto;
-}
-
-.moves button {
-  padding: 2px 6px;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 12px;
-}
-
-.moves button.active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
 }
 
 .boardcol,
@@ -302,4 +275,271 @@ table.explorer tr.total td {
 .result-bar .b {
   background: #333;
   color: #eee;
+}
+
+.headers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.headers label {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--muted);
+  gap: 2px;
+}
+
+.headers input {
+  width: 150px;
+  padding: 3px 6px;
+}
+
+.notation {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 8px;
+  min-height: 120px;
+  max-height: 320px;
+  overflow: auto;
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.notation .move {
+  padding: 1px 3px;
+  margin-right: 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.notation .variation .move {
+  font-weight: normal;
+}
+
+.notation .move:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.notation .move.active {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.notation .start {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.notation .comment {
+  color: var(--accent);
+  margin-right: 4px;
+}
+
+.notation .variation::before {
+  content: "(";
+}
+
+.notation .variation::after {
+  content: ") ";
+}
+
+.notation .variation.block {
+  display: block;
+  margin: 2px 0 2px 16px;
+  color: var(--muted);
+}
+
+.notation .variation.block::before,
+.notation .variation.block::after {
+  content: "";
+}
+
+.notation .variation .move {
+  color: var(--text);
+}
+
+.source summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.source textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 140px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+
+.source .muted {
+  padding: 0;
+  font-size: 12px;
+}
+
+.actions .muted {
+  padding: 0;
+  align-self: center;
+  font-size: 12px;
+}
+
+tr.playable {
+  cursor: pointer;
+}
+
+.overlay,
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+.overlay {
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 320px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+.dialog textarea {
+  font-family: inherit;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.menu {
+  position: absolute;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.menu > button {
+  border: none;
+  text-align: left;
+  padding: 5px 10px;
+  background: transparent;
+}
+
+.menu > button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.menu hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.menu-row {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.menu-row button {
+  flex: 1;
+  padding: 3px 0;
+  min-width: 24px;
+}
+
+.menu-row button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.welcome h2 {
+  margin: 0 0 4px;
+}
+
+.welcome .muted {
+  padding: 0;
+}
+
+button.recent {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  text-align: left;
+  padding: 8px 12px;
+}
+
+button.recent .name {
+  font-weight: 600;
+}
+
+button.recent .where {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.recent .when {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.form input,
+.form select {
+  width: min(560px, 80vw);
+  box-sizing: border-box;
+}
+
+.list-end {
+  text-align: center;
+}
+
+.form small {
+  max-width: min(560px, 80vw);
+  font-size: 11px;
 }

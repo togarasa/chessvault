@@ -39,8 +39,8 @@ function ResultBar({ white, draws, black }: { white: number; draws: number; blac
   );
 }
 
-/// Lichess opening explorer statistics for the board position.
-export function ExplorerPanel({ fen }: { fen: string }) {
+/// Lichess opening explorer statistics for the board position. Clicking a move plays it.
+export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: string) => void }) {
   const [database, setDatabase] = useState<Database>("masters");
   const [data, setData] = useState<Explorer | null>(null);
   const [error, setError] = useState("");
@@ -146,7 +146,7 @@ export function ExplorerPanel({ fen }: { fen: string }) {
             </thead>
             <tbody>
               {data.moves.map((m) => (
-                <tr key={m.uci}>
+                <tr key={m.uci} className="playable" onClick={() => onPlay(m.uci)} title={`Play ${m.san}`}>
                   <td>{m.san}</td>
                   <td>{(m.white + m.draws + m.black).toLocaleString()}</td>
                   <td>
