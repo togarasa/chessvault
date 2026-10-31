@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
+use crate::validate;
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS games (
     id         INTEGER PRIMARY KEY,
@@ -110,6 +112,7 @@ impl Store {
         let games = split_games(text.trim_start_matches('\u{feff}'))?;
         let tx = self.conn.transaction()?;
         for pgn in &games {
+            check_game(pgn)?;
             let h = Headers::from_pgn(pgn);
             tx.execute(
                 INSERT_GAME,
@@ -171,6 +174,7 @@ impl Store {
     /// Replaces a game's PGN. The previous version is kept for `undo`.
     pub fn update_pgn(&mut self, id: i64, pgn: &str) -> Result<()> {
         let pgn = single_game(pgn)?;
+        check_game(&pgn)?;
         let tx = self.conn.transaction()?;
         let old: String = tx
             .query_row("SELECT pgn FROM games WHERE id = ?1", params![id], |r| r.get(0))
@@ -303,6 +307,11 @@ fn single_game(pgn: &str) -> Result<String> {
         1 => Ok(games.remove(0)),
         n => Err(Error::InvalidGame(format!("expected one game, found {n}"))),
     }
+}
+
+/// Rejects a game whose movetext has illegal or unreadable moves.
+fn check_game(pgn: &str) -> Result<()> {
+    validate::check_movetext(pgn).map_err(Error::InvalidGame)
 }
 
 fn now() -> i64 {
