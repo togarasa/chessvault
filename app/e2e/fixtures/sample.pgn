@@ -1,0 +1,36 @@
+[Event "E2E Club"]
+[Site "Testville"]
+[Date "2026.01.10"]
+[Round "1"]
+[White "Alpha, Anna"]
+[Black "Beta, Bernd"]
+[Result "1-0"]
+[WhiteElo "2100"]
+[BlackElo "1900"]
+[ECO "C84"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 1-0
+
+[Event "E2E Club"]
+[Site "Testville"]
+[Date "2026.01.17"]
+[Round "2"]
+[White "Gamma, Gerd"]
+[Black "Alpha, Anna"]
+[Result "0-1"]
+[WhiteElo "1800"]
+[BlackElo "2100"]
+[ECO "D31"]
+
+1. d4 d5 2. c4 e6 0-1
+
+[Event "E2E Club"]
+[Site "Testville"]
+[Date "2026.01.24"]
+[Round "3"]
+[White "Delta, Dora"]
+[Black "Gamma, Gerd"]
+[Result "1/2-1/2"]
+[ECO "B20"]
+
+1. e4 { A good start } ( 1. d4 Nf6 ) 1... c5 1/2-1/2

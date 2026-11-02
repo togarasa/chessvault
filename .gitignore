@@ -2,3 +2,6 @@ target/
 *.pgn
 *.sqlite
 games/
+!app/e2e/fixtures/*.pgn
+test-results/
+playwright-report/

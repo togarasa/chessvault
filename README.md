@@ -7,7 +7,12 @@ An open-source chess database and analysis tool for Windows and Linux, written i
 - Analyze positions and games with Stockfish or any UCI engine
 - Browse the Lichess opening explorer and games
 
-**Status:** early development. The first milestone is a command-line converter.
+**Status:** early development. The desktop app opens PGN files and ChessVault databases, edits games with variations and comments, and has Stockfish and Lichess explorer panels.
+
+## Tests
+
+- Core library and CLI: `cargo test --workspace`
+- Desktop app, end to end (Windows): `pnpm test:e2e` in `app/`. Playwright drives the real app through WebView2's debugging port, with its own profile and a copy of `app/e2e/fixtures/sample.pgn`. The first run builds a test copy of the app into `target/e2e`, which takes a few minutes.
 
 ## Disclaimer
 
