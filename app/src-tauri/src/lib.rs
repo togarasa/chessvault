@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chessvault_core::db::{self, Game, GameSummary, Store};
+use chessvault_core::db::{self, Game, GameSummary, Order, Store};
 use chessvault_core::engine::{Engine, EngineLine};
 use chessvault_core::online::lichess::{self, Database, Explorer};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -51,18 +51,19 @@ fn import_pgn(path: String, state: State<'_, AppState>) -> Result<usize, String>
 }
 
 #[tauri::command]
-fn list_games(limit: i64, offset: i64, state: State<'_, AppState>) -> Result<Vec<GameSummary>, String> {
-    with_store(&state, |store| store.list(limit, offset).map_err(|e| e.to_string()))
+fn list_games(order: Order, limit: i64, offset: i64, state: State<'_, AppState>) -> Result<Vec<GameSummary>, String> {
+    with_store(&state, |store| store.list(order, limit, offset).map_err(|e| e.to_string()))
 }
 
 #[tauri::command]
 fn search_games(
     player: String,
+    order: Order,
     limit: i64,
     offset: i64,
     state: State<'_, AppState>,
 ) -> Result<Vec<GameSummary>, String> {
-    with_store(&state, |store| store.search_player(&player, limit, offset).map_err(|e| e.to_string()))
+    with_store(&state, |store| store.search_player(&player, order, limit, offset).map_err(|e| e.to_string()))
 }
 
 #[tauri::command]
@@ -97,11 +98,6 @@ fn add_game_to(path: String, pgn: String) -> Result<(), String> {
 fn export_pgn(path: String, ids: Option<Vec<i64>>, state: State<'_, AppState>) -> Result<usize, String> {
     let path = PathBuf::from(path.trim().trim_matches('"'));
     with_store(&state, |store| store.export_pgn_file(&path, ids.as_deref()).map_err(|e| e.to_string()))
-}
-
-#[tauri::command]
-fn file_exists(path: String) -> bool {
-    Path::new(path.trim().trim_matches('"')).exists()
 }
 
 #[tauri::command]
@@ -178,6 +174,7 @@ async fn explore(database: Database, fen: String, app: AppHandle, state: State<'
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             open_database,
@@ -191,7 +188,6 @@ pub fn run() {
             delete_game,
             add_game_to,
             export_pgn,
-            file_exists,
             start_analysis,
             stop_analysis,
             set_lichess_token,

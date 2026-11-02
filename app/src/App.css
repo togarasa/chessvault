@@ -543,3 +543,28 @@ button.recent .when {
   max-width: min(560px, 80vw);
   font-size: 11px;
 }
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable:hover,
+th.sorted {
+  color: var(--accent);
+}
+
+td.num,
+th.num {
+  text-align: right;
+}
+
+.current-file {
+  margin-left: auto;
+  align-self: center;
+  color: var(--muted);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

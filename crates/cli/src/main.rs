@@ -3,7 +3,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use chessvault_core::convert::convert_to_pgn;
-use chessvault_core::db::{GameSummary, Store};
+use chessvault_core::db::{GameSummary, Order, Store};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -94,11 +94,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::List { limit } => {
             let store = Store::open(&db)?;
-            print_summaries(&store.list(limit, 0)?);
+            print_summaries(&store.list(Order::default(), limit, 0)?);
         }
         Command::Search { player, limit } => {
             let store = Store::open(&db)?;
-            print_summaries(&store.search_player(&player, limit, 0)?);
+            print_summaries(&store.search_player(&player, Order::default(), limit, 0)?);
         }
         Command::Show { id } => {
             let store = Store::open(&db)?;

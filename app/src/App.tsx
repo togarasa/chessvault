@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { Key } from "chessground/types";
 import { Move, NormalMove, Role, SquareName } from "chessops/types";
 import { parseSquare, parseUci, squareRank } from "chessops/util";
@@ -33,11 +34,50 @@ import "./App.css";
 type GameSummary = {
   id: number;
   event: string;
+  site: string;
   date: string;
+  round: string;
   white: string;
   black: string;
   result: string;
+  eco: string;
+  whiteElo: number | null;
+  blackElo: number | null;
+  /// Half-moves in the main line.
+  plies: number | null;
 };
+
+type SortColumn =
+  | "id"
+  | "white"
+  | "whiteElo"
+  | "black"
+  | "blackElo"
+  | "result"
+  | "plies"
+  | "eco"
+  | "event"
+  | "site"
+  | "round"
+  | "date";
+
+type Order = { column: SortColumn; descending: boolean };
+
+/// The game list's columns, in ChessBase's familiar order. Clicking a header sorts by it.
+const COLUMNS: { key: SortColumn; label: string; value: (g: GameSummary) => string | number; className?: string }[] = [
+  { key: "id", label: "No.", value: (g) => g.id, className: "num" },
+  { key: "white", label: "White", value: (g) => g.white },
+  { key: "whiteElo", label: "Elo", value: (g) => g.whiteElo ?? "", className: "num" },
+  { key: "black", label: "Black", value: (g) => g.black },
+  { key: "blackElo", label: "Elo", value: (g) => g.blackElo ?? "", className: "num" },
+  { key: "result", label: "Result", value: (g) => g.result },
+  { key: "plies", label: "Moves", value: (g) => (g.plies === null ? "" : Math.ceil(g.plies / 2)), className: "num" },
+  { key: "eco", label: "ECO", value: (g) => g.eco },
+  { key: "event", label: "Event", value: (g) => g.event },
+  { key: "site", label: "Site", value: (g) => g.site },
+  { key: "round", label: "Round", value: (g) => g.round },
+  { key: "date", label: "Date", value: (g) => g.date },
+];
 
 type Game = GameSummary & { pgn: string };
 
@@ -49,7 +89,17 @@ const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const RESULTS = ["*", "1-0", "0-1", "1/2-1/2"];
 const HEADER_FIELDS = ["White", "Black", "Event", "Date"];
 const THIS_DATABASE = "This database";
-const OTHER_FILE = "Another file (PGN or database)";
+const EXISTING_FILE = "An existing PGN file or database…";
+const NEW_FILE = "A new PGN file or database…";
+
+const PGN_FILTER = { name: "PGN files", extensions: ["pgn"] };
+const DATABASE_FILTER = { name: "ChessVault databases", extensions: ["sqlite"] };
+const GAMES_FILTER = { name: "PGN files and ChessVault databases", extensions: ["pgn", "sqlite"] };
+
+/// The folder part of a path, ending in a separator, or "" when there is none.
+function folderOf(path: string) {
+  return path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
+}
 
 function today() {
   const d = new Date();
@@ -63,7 +113,6 @@ function newGamePgn() {
 
 function App() {
   const [dbPath, setDbPath] = useState("");
-  const [pgnPath, setPgnPath] = useState("");
   const [search, setSearch] = useState("");
   const [games, setGames] = useState<GameSummary[]>([]);
   const [status, setStatus] = useState("Open a database to begin.");
@@ -71,6 +120,7 @@ function App() {
   /// Whether the database may have more games than the list has loaded.
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [order, setOrder] = useState<Order>({ column: "id", descending: false });
   const [recent, setRecent] = useState<RecentFile[]>(loadRecent);
 
   /// The game on the board: its id (null until a new game is saved), its moves and the shown position.
@@ -145,9 +195,18 @@ function App() {
     return answer === "discard";
   }
 
-  /// Opens a database or PGN file, by default the one typed in the toolbar.
-  async function openDatabase(path = dbPath.trim().replace(/^"|"$/g, "")) {
+  /// Opens a database or PGN file, asking which one when `path` is not given.
+  async function openDatabase(path?: string) {
     if (!(await confirmDiscard())) return;
+    if (path === undefined) {
+      const picked = await openFileDialog({
+        title: "Open a PGN file or database",
+        defaultPath: folderOf(dbPath) || undefined,
+        filters: [GAMES_FILTER, PGN_FILTER, DATABASE_FILTER],
+      });
+      if (typeof picked !== "string") return;
+      path = picked;
+    }
     setDbPath(path);
     let opened: OpenResult;
     try {
@@ -178,22 +237,24 @@ function App() {
 
   /// Writes all games, or the game on the board, to a PGN file that ChessBase and other programs can open.
   async function exportPgn() {
-    const base = dbPath.replace(/\.(pgn|sqlite)$/i, "");
-    const choice = await new Promise<Record<string, string> | null>((resolve) =>
-      setAsk({
+    let onlyShown = false;
+    if (gameId !== null) {
+      const answer = await askUser({
         title: "Export to PGN",
-        fields: [
-          { name: "File", value: `${base} (ChessVault).pgn` },
-          { name: "Games", value: "All games", options: gameId === null ? ["All games"] : ["All games", "Game on the board"] },
+        choices: [
+          { label: "All games", value: "all" },
+          { label: "Game on the board", value: "shown" },
         ],
-        answer: (value, values) => {
-          setAsk(null);
-          resolve(value && values ? values : null);
-        },
-      }),
-    );
-    if (!choice) return;
-    const path = choice.File.trim().replace(/^"|"$/g, "");
+      });
+      if (!answer) return;
+      onlyShown = answer === "shown";
+    }
+    // Windows' own save window asks before replacing a file.
+    const path = await saveFileDialog({
+      title: "Export to PGN",
+      defaultPath: `${dbPath.replace(/\.(pgn|sqlite)$/i, "")} (ChessVault).pgn`,
+      filters: [PGN_FILTER],
+    });
     if (!path) return;
     if (dirty) {
       const answer = await askUser({
@@ -202,39 +263,39 @@ function App() {
       });
       if (answer !== "go") return;
     }
-    if (await invoke<boolean>("file_exists", { path })) {
-      const answer = await askUser({
-        title: `${fileName(path)} already exists.`,
-        choices: [{ label: "Replace it", value: "replace" }],
-      });
-      if (answer !== "replace") return;
-    }
     await run(async () => {
-      const ids = choice.Games === "All games" ? null : [gameId];
+      const ids = onlyShown ? [gameId] : null;
       const written = await invoke<number>("export_pgn", { path, ids });
       setStatus(`Exported ${written} ${written === 1 ? "game" : "games"} to ${path}.`);
     });
   }
 
+  /// Adds the games of a PGN file to the open database.
   async function importPgn() {
+    const path = await openFileDialog({
+      title: "Import the games of a PGN file",
+      defaultPath: folderOf(dbPath) || undefined,
+      filters: [PGN_FILTER],
+    });
+    if (typeof path !== "string") return;
     await run(async () => {
-      const imported = await invoke<number>("import_pgn", { path: pgnPath });
+      const imported = await invoke<number>("import_pgn", { path });
       setStatus(`Imported ${imported} games.`);
       await loadGames();
     });
   }
 
-  function fetchGames(query: string, limit: number, offset: number) {
+  function fetchGames(query: string, sort: Order, limit: number, offset: number) {
     return query.trim()
-      ? invoke<GameSummary[]>("search_games", { player: query.trim(), limit, offset })
-      : invoke<GameSummary[]>("list_games", { limit, offset });
+      ? invoke<GameSummary[]>("search_games", { player: query.trim(), order: sort, limit, offset })
+      : invoke<GameSummary[]>("list_games", { order: sort, limit, offset });
   }
 
   /// Loads the list from the top again, keeping as many rows as are loaded now so a refresh
   /// after saving or deleting doesn't lose the place.
-  async function loadGames(query = search, keep = games.length) {
+  async function loadGames(query = search, keep = games.length, sort = order) {
     const limit = Math.max(PAGE_SIZE, keep);
-    const found = await fetchGames(query, limit, 0);
+    const found = await fetchGames(query, sort, limit, 0);
     setGames(found);
     setHasMore(found.length === limit);
   }
@@ -243,7 +304,7 @@ function App() {
     if (!hasMore || loadingMore) return;
     setLoadingMore(true);
     await run(async () => {
-      const found = await fetchGames(search, PAGE_SIZE, games.length);
+      const found = await fetchGames(search, order, PAGE_SIZE, games.length);
       setGames((loaded) => [...loaded, ...found]);
       setHasMore(found.length === PAGE_SIZE);
     });
@@ -303,8 +364,15 @@ function App() {
     });
   }
 
+  /// Sorts the list by `column`; clicking the sorted column again reverses it.
+  async function sortBy(column: SortColumn) {
+    const next = { column, descending: order.column === column && !order.descending };
+    setOrder(next);
+    await run(() => loadGames(search, 0, next));
+  }
+
   /// Deletes a game from the database after asking.
-  async function deleteGame(game: GameSummary) {
+  async function deleteGame(game: Pick<GameSummary, "id" | "white" | "black" | "date">) {
     const answer = await askUser({
       title: `Delete game ${game.id}: ${game.white} – ${game.black} (${game.date})? This cannot be undone.`,
       choices: [{ label: "Delete game", value: "delete" }],
@@ -327,22 +395,21 @@ function App() {
     });
   }
 
-  /// Asks for the players and event of a new game and puts them in its headers. Returns false when cancelled.
-  /// Returns where to save it: "" for the open database, a file path for another file, or null when cancelled.
+  /// Asks for the players and event of a new game and puts them in its headers, then where to save it.
+  /// Returns "" for the open database, a file path for another file, or null when cancelled.
   async function askGameDetails(): Promise<string | null> {
     if (!tree) return null;
-    const folder = dbPath.slice(0, Math.max(dbPath.lastIndexOf("\\"), dbPath.lastIndexOf("/")) + 1);
     const fields = await new Promise<Record<string, string> | null>((resolve) =>
       setAsk({
         title: "Save as new game",
         fields: [
           ...HEADER_FIELDS.map((name) => ({ name, value: tree.headers.get(name) === "?" ? "" : (tree.headers.get(name) ?? "") })),
           { name: "Result", value: tree.headers.get("Result") ?? "*", options: RESULTS },
-          { name: "Save to", value: THIS_DATABASE, options: [THIS_DATABASE, OTHER_FILE] },
           {
-            name: "File",
-            value: `${folder}My games.pgn`,
-            hint: "Used for another file. A .pgn file gets the game added (or is created with only this game); a .sqlite file is a ChessVault database.",
+            name: "Save to",
+            value: THIS_DATABASE,
+            options: [THIS_DATABASE, EXISTING_FILE, NEW_FILE],
+            hint: "A PGN file gets the game added at the end; a new PGN file holds only this game.",
           },
         ],
         answer: (value, values) => {
@@ -355,9 +422,19 @@ function App() {
     for (const name of [...HEADER_FIELDS, "Result"]) tree.headers.set(name, fields[name].trim() || "?");
     changed();
     if (fields["Save to"] === THIS_DATABASE) return "";
-    const path = fields.File.trim().replace(/^"|"$/g, "");
-    if (!path) throw new Error("enter the file to save the game to");
-    return path;
+    const path =
+      fields["Save to"] === EXISTING_FILE
+        ? await openFileDialog({
+            title: "Add the game to",
+            defaultPath: folderOf(dbPath) || undefined,
+            filters: [GAMES_FILTER, PGN_FILTER, DATABASE_FILTER],
+          })
+        : await saveFileDialog({
+            title: "Save the game as",
+            defaultPath: `${folderOf(dbPath)}${tree.headers.get("White")} - ${tree.headers.get("Black")}.pgn`,
+            filters: [PGN_FILTER, DATABASE_FILTER],
+          });
+    return typeof path === "string" ? path : null;
   }
 
   /// Loads a game again after it was saved, staying on the shown move.
@@ -495,14 +572,8 @@ function App() {
   return (
     <div className="app">
       <header className="toolbar">
-        <input
-          className="path"
-          placeholder="Open a .pgn file or a .sqlite database"
-          value={dbPath}
-          onChange={(e) => setDbPath(e.currentTarget.value)}
-        />
-        <button onClick={() => openDatabase()} disabled={!dbPath.trim()}>
-          Open
+        <button onClick={() => openDatabase()} title="Open a PGN file or a ChessVault database">
+          Open…
         </button>
         <button
           onClick={(e) => {
@@ -522,21 +593,20 @@ function App() {
         >
           Recent ▾
         </button>
-        <input
-          className="path"
-          placeholder="PGN file to import"
-          value={pgnPath}
-          onChange={(e) => setPgnPath(e.currentTarget.value)}
-        />
-        <button onClick={importPgn} disabled={!isOpen || !pgnPath.trim()}>
-          Import
+        <button onClick={importPgn} disabled={!isOpen} title="Add the games of a PGN file to the open database">
+          Import PGN…
         </button>
         <button onClick={newGame} disabled={!isOpen}>
           New game
         </button>
         <button onClick={exportPgn} disabled={!isOpen}>
-          Export PGN
+          Export PGN…
         </button>
+        {isOpen && (
+          <span className="current-file" title={dbPath}>
+            {fileName(dbPath)}
+          </span>
+        )}
       </header>
 
       <div className="search">
@@ -563,12 +633,17 @@ function App() {
           <table>
             <thead>
               <tr>
-                <th>No.</th>
-                <th>Date</th>
-                <th>White</th>
-                <th>Black</th>
-                <th>Result</th>
-                <th>Event</th>
+                {COLUMNS.map((c) => (
+                  <th
+                    key={c.key}
+                    className={[c.className, "sortable", order.column === c.key ? "sorted" : ""].join(" ")}
+                    onClick={() => isOpen && sortBy(c.key)}
+                    title={`Sort by ${c.label}`}
+                  >
+                    {c.label}
+                    {order.column === c.key && (order.descending ? " ▼" : " ▲")}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -589,12 +664,11 @@ function App() {
                     });
                   }}
                 >
-                  <td>{g.id}</td>
-                  <td>{g.date}</td>
-                  <td>{g.white}</td>
-                  <td>{g.black}</td>
-                  <td>{g.result}</td>
-                  <td>{g.event}</td>
+                  {COLUMNS.map((c) => (
+                    <td key={c.key} className={c.className}>
+                      {c.value(g)}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -675,8 +749,6 @@ function App() {
                           white: header("White"),
                           black: header("Black"),
                           date: header("Date"),
-                          event: header("Event"),
-                          result: header("Result"),
                         });
                       }}
                       disabled={gameId === null}

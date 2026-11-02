@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS games (
     black      TEXT NOT NULL,
     result     TEXT NOT NULL,
     eco        TEXT NOT NULL,
+    white_elo  INTEGER,
+    black_elo  INTEGER,
+    plies      INTEGER,
     pgn        TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -36,8 +39,11 @@ CREATE INDEX IF NOT EXISTS games_black ON games(black);
 CREATE INDEX IF NOT EXISTS revisions_game ON revisions(game_id);
 ";
 
-const INSERT_GAME: &str = "INSERT INTO games (event, site, date, round, white, black, result, eco, pgn, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+const INSERT_GAME: &str = "INSERT INTO games
+     (event, site, date, round, white, black, result, eco, white_elo, black_elo, plies, pgn, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+
+const SUMMARY_COLUMNS: &str = "id, event, site, date, round, white, black, result, eco, white_elo, black_elo, plies";
 
 /// Errors from the store.
 #[derive(Debug)]
@@ -162,13 +168,68 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// A game as shown in lists and search results.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GameSummary {
     pub id: i64,
     pub event: String,
+    pub site: String,
     pub date: String,
+    pub round: String,
     pub white: String,
     pub black: String,
     pub result: String,
+    pub eco: String,
+    pub white_elo: Option<i64>,
+    pub black_elo: Option<i64>,
+    /// Half-moves in the main line.
+    pub plies: Option<i64>,
+}
+
+/// A column the game list can be sorted by.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SortColumn {
+    #[default]
+    Id,
+    White,
+    WhiteElo,
+    Black,
+    BlackElo,
+    Result,
+    Plies,
+    Eco,
+    Event,
+    Site,
+    Round,
+    Date,
+}
+
+/// How to sort the game list. Games without a value (no Elo, say) come last either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct Order {
+    pub column: SortColumn,
+    pub descending: bool,
+}
+
+impl Order {
+    fn sql(self) -> String {
+        let column = match self.column {
+            SortColumn::Id => "id",
+            SortColumn::White => "white",
+            SortColumn::WhiteElo => "white_elo",
+            SortColumn::Black => "black",
+            SortColumn::BlackElo => "black_elo",
+            SortColumn::Result => "result",
+            SortColumn::Plies => "plies",
+            SortColumn::Eco => "eco",
+            SortColumn::Event => "event",
+            SortColumn::Site => "site",
+            SortColumn::Round => "round",
+            SortColumn::Date => "date",
+        };
+        let dir = if self.descending { "DESC" } else { "ASC" };
+        format!("ORDER BY {column} IS NULL OR {column} = '', {column} {dir}, id {dir}")
+    }
 }
 
 /// A full game, including its PGN text.
@@ -208,7 +269,41 @@ impl Store {
 
     fn from_connection(conn: Connection) -> Result<Self> {
         conn.execute_batch(SCHEMA)?;
-        Ok(Store { conn })
+        let mut store = Store { conn };
+        store.migrate()?;
+        Ok(store)
+    }
+
+    /// Adds the Elo and move count columns to databases made before they existed,
+    /// filling them in from each game's PGN.
+    fn migrate(&mut self) -> Result<()> {
+        let has_plies = self
+            .conn
+            .prepare("SELECT 1 FROM pragma_table_info('games') WHERE name = 'plies'")?
+            .exists([])?;
+        if has_plies {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE games ADD COLUMN white_elo INTEGER;
+             ALTER TABLE games ADD COLUMN black_elo INTEGER;
+             ALTER TABLE games ADD COLUMN plies INTEGER;",
+        )?;
+        let games: Vec<(i64, String)> = tx
+            .prepare("SELECT id, pgn FROM games")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (id, pgn) in games {
+            // Stored games were checked when saved; leave the columns empty if one no longer reads.
+            let Ok(h) = Headers::from_pgn(&pgn) else { continue };
+            tx.execute(
+                "UPDATE games SET white_elo = ?1, black_elo = ?2, plies = ?3 WHERE id = ?4",
+                params![h.white_elo, h.black_elo, h.plies, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Imports every game in `text`. Either all games are imported or none are.
@@ -216,12 +311,8 @@ impl Store {
         let games = split_games(text.trim_start_matches('\u{feff}'))?;
         let tx = self.conn.transaction()?;
         for pgn in &games {
-            check_game(pgn)?;
-            let h = Headers::from_pgn(pgn);
-            tx.execute(
-                INSERT_GAME,
-                params![h.event, h.site, h.date, h.round, h.white, h.black, h.result, h.eco, pgn, now()],
-            )?;
+            let h = Headers::from_pgn(pgn)?;
+            tx.execute(INSERT_GAME, h.insert_params(pgn).as_slice())?;
         }
         tx.commit()?;
         Ok(games.len())
@@ -230,12 +321,8 @@ impl Store {
     /// Adds one game and returns its id.
     pub fn add_game(&mut self, pgn: &str) -> Result<i64> {
         let pgn = single_game(pgn)?;
-        check_game(&pgn)?;
-        let h = Headers::from_pgn(&pgn);
-        self.conn.execute(
-            INSERT_GAME,
-            params![h.event, h.site, h.date, h.round, h.white, h.black, h.result, h.eco, pgn, now()],
-        )?;
+        let h = Headers::from_pgn(&pgn)?;
+        self.conn.execute(INSERT_GAME, h.insert_params(&pgn).as_slice())?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -289,22 +376,23 @@ impl Store {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0))?)
     }
 
-    /// Lists games in the order they were imported.
-    pub fn list(&self, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, event, date, white, black, result FROM games ORDER BY id LIMIT ?1 OFFSET ?2",
-        )?;
+    /// Lists games in `order`.
+    pub fn list(&self, order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM games {} LIMIT ?1 OFFSET ?2",
+            order.sql()
+        ))?;
         let rows = stmt.query_map(params![limit, offset], summary_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Finds games where `name` appears as either player, skipping the first `offset` matches.
-    pub fn search_player(&self, name: &str, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
+    /// Finds games where `name` appears as either player, in `order`, skipping the first `offset` matches.
+    pub fn search_player(&self, name: &str, order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
         let pattern = format!("%{name}%");
-        let mut stmt = self.conn.prepare(
-            "SELECT id, event, date, white, black, result FROM games
-             WHERE white LIKE ?1 OR black LIKE ?1 ORDER BY id LIMIT ?2 OFFSET ?3",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM games WHERE white LIKE ?1 OR black LIKE ?1 {} LIMIT ?2 OFFSET ?3",
+            order.sql()
+        ))?;
         let rows = stmt.query_map(params![pattern, limit, offset], summary_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -335,7 +423,6 @@ impl Store {
     /// Replaces a game's PGN. The previous version is kept for `undo`.
     pub fn update_pgn(&mut self, id: i64, pgn: &str) -> Result<()> {
         let pgn = single_game(pgn)?;
-        check_game(&pgn)?;
         let tx = self.conn.transaction()?;
         let old: String = tx
             .query_row("SELECT pgn FROM games WHERE id = ?1", params![id], |r| r.get(0))
@@ -375,25 +462,34 @@ fn summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<GameSummary> {
     Ok(GameSummary {
         id: r.get(0)?,
         event: r.get(1)?,
-        date: r.get(2)?,
-        white: r.get(3)?,
-        black: r.get(4)?,
-        result: r.get(5)?,
+        site: r.get(2)?,
+        date: r.get(3)?,
+        round: r.get(4)?,
+        white: r.get(5)?,
+        black: r.get(6)?,
+        result: r.get(7)?,
+        eco: r.get(8)?,
+        white_elo: r.get(9)?,
+        black_elo: r.get(10)?,
+        plies: r.get(11)?,
     })
 }
 
 fn write_game(tx: &Transaction<'_>, id: i64, pgn: &str) -> Result<()> {
-    let h = Headers::from_pgn(pgn);
+    let h = Headers::from_pgn(pgn)?;
+    let pgn = pgn.to_string();
+    let mut values = h.insert_params(&pgn);
+    values.push(&id);
     tx.execute(
-        "UPDATE games SET event = ?1, site = ?2, date = ?3, round = ?4, white = ?5,
-             black = ?6, result = ?7, eco = ?8, pgn = ?9, updated_at = ?10
-         WHERE id = ?11",
-        params![h.event, h.site, h.date, h.round, h.white, h.black, h.result, h.eco, pgn, now(), id],
+        "UPDATE games SET event = ?1, site = ?2, date = ?3, round = ?4, white = ?5, black = ?6,
+             result = ?7, eco = ?8, white_elo = ?9, black_elo = ?10, plies = ?11, pgn = ?12, updated_at = ?13
+         WHERE id = ?14",
+        values.as_slice(),
     )?;
     Ok(())
 }
 
-/// The header fields stored as columns.
+/// The fields stored as columns: header tags plus the length of the main line.
 struct Headers {
     event: String,
     site: String,
@@ -403,11 +499,18 @@ struct Headers {
     black: String,
     result: String,
     eco: String,
+    white_elo: Option<i64>,
+    black_elo: Option<i64>,
+    plies: i64,
+    updated_at: i64,
 }
 
 impl Headers {
-    fn from_pgn(pgn: &str) -> Self {
-        Headers {
+    /// Reads the columns of a game, failing if its moves are not legal.
+    fn from_pgn(pgn: &str) -> Result<Self> {
+        let main_line = validate::main_line(pgn).map_err(Error::InvalidGame)?;
+        let elo = |name| tag(pgn, name).trim().parse::<i64>().ok().filter(|&elo| elo > 0);
+        Ok(Headers {
             event: tag(pgn, "Event"),
             site: tag(pgn, "Site"),
             date: tag(pgn, "Date"),
@@ -416,7 +519,30 @@ impl Headers {
             black: tag(pgn, "Black"),
             result: tag(pgn, "Result"),
             eco: tag(pgn, "ECO"),
-        }
+            white_elo: elo("WhiteElo"),
+            black_elo: elo("BlackElo"),
+            plies: main_line.len() as i64 - 1,
+            updated_at: now(),
+        })
+    }
+
+    /// The values for `INSERT_GAME`, in its order.
+    fn insert_params<'a>(&'a self, pgn: &'a String) -> Vec<&'a dyn rusqlite::ToSql> {
+        vec![
+            &self.event,
+            &self.site,
+            &self.date,
+            &self.round,
+            &self.white,
+            &self.black,
+            &self.result,
+            &self.eco,
+            &self.white_elo,
+            &self.black_elo,
+            &self.plies,
+            pgn,
+            &self.updated_at,
+        ]
     }
 }
 
@@ -495,11 +621,11 @@ mod tests {
         let text = format!("{GAME_1}\n{GAME_2}");
         assert_eq!(store.import_pgn(&text).unwrap(), 2);
         assert_eq!(store.count().unwrap(), 2);
-        let found = store.search_player("Lysenko", 10, 0).unwrap();
+        let found = store.search_player("Lysenko", Order::default(), 10, 0).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].white, "Vykouk, Jan");
-        assert_eq!(store.search_player("Nobody", 10, 0).unwrap().len(), 0);
-        let second_page = store.search_player("Lysenko", 1, 1).unwrap();
+        assert_eq!(store.search_player("Nobody", Order::default(), 10, 0).unwrap().len(), 0);
+        let second_page = store.search_player("Lysenko", Order::default(), 1, 1).unwrap();
         assert_eq!(second_page.len(), 1);
         assert_eq!(second_page[0].id, found[1].id);
     }
@@ -508,7 +634,7 @@ mod tests {
     fn edit_keeps_history_and_undo_restores() {
         let mut store = Store::open_in_memory().unwrap();
         store.import_pgn(GAME_1).unwrap();
-        let id = store.list(10, 0).unwrap()[0].id;
+        let id = store.list(Order::default(), 10, 0).unwrap()[0].id;
 
         let edited = GAME_1.replace("[Result \"1-0\"]", "[Result \"0-1\"]");
         store.update_pgn(id, &edited).unwrap();
@@ -541,7 +667,7 @@ mod tests {
     fn export_writes_games_that_import_again() {
         let mut store = Store::open_in_memory().unwrap();
         store.import_pgn(&format!("{GAME_1}\n{GAME_2}")).unwrap();
-        let ids: Vec<i64> = store.list(10, 0).unwrap().iter().map(|g| g.id).collect();
+        let ids: Vec<i64> = store.list(Order::default(), 10, 0).unwrap().iter().map(|g| g.id).collect();
 
         let mut all = Vec::new();
         assert_eq!(store.export_pgn(&mut all, None).unwrap(), 2);
@@ -571,7 +697,7 @@ mod tests {
     fn delete_removes_the_game_and_its_history() {
         let mut store = Store::open_in_memory().unwrap();
         store.import_pgn(&format!("{GAME_1}\n{GAME_2}")).unwrap();
-        let id = store.list(10, 0).unwrap()[0].id;
+        let id = store.list(Order::default(), 10, 0).unwrap()[0].id;
         store.update_pgn(id, &GAME_1.replace("1-0", "0-1")).unwrap();
 
         assert!(store.delete_game(id).unwrap());
@@ -621,10 +747,61 @@ mod tests {
     }
 
     #[test]
+    fn lists_elo_and_moves_and_sorts_by_any_column() {
+        let mut store = Store::open_in_memory().unwrap();
+        let rated = GAME_2.replace("[Result \"0-1\"]", "[Result \"0-1\"]\n[WhiteElo \"2100\"]\n[BlackElo \"?\"]");
+        store.import_pgn(&format!("{GAME_1}\n{rated}")).unwrap();
+
+        let games = store.list(Order::default(), 10, 0).unwrap();
+        assert_eq!((games[0].plies, games[0].white_elo, games[0].eco.as_str()), (Some(3), None, "B03"));
+        assert_eq!((games[1].plies, games[1].white_elo, games[1].black_elo), (Some(2), Some(2100), None));
+
+        let by = |column, descending| {
+            let order = Order { column, descending };
+            store.list(order, 10, 0).unwrap().iter().map(|g| g.white.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(by(SortColumn::White, false), ["Rakhmangulova, Anastasiya", "Vykouk, Jan"]);
+        assert_eq!(by(SortColumn::Date, true), ["Vykouk, Jan", "Rakhmangulova, Anastasiya"]);
+        // Games without an Elo come last, ascending or descending.
+        assert_eq!(by(SortColumn::WhiteElo, false), ["Rakhmangulova, Anastasiya", "Vykouk, Jan"]);
+        assert_eq!(by(SortColumn::WhiteElo, true), ["Rakhmangulova, Anastasiya", "Vykouk, Jan"]);
+        let found = store.search_player("Lysenko", Order { column: SortColumn::Plies, descending: true }, 10, 0);
+        assert_eq!(found.unwrap()[0].plies, Some(3));
+    }
+
+    #[test]
+    fn an_older_database_gets_the_new_columns_filled_in() {
+        let dir = temp_dir("migrate");
+        let path = dir.join("old.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE games (id INTEGER PRIMARY KEY, event TEXT NOT NULL, site TEXT NOT NULL,
+                     date TEXT NOT NULL, round TEXT NOT NULL, white TEXT NOT NULL, black TEXT NOT NULL,
+                     result TEXT NOT NULL, eco TEXT NOT NULL, pgn TEXT NOT NULL, updated_at INTEGER NOT NULL);",
+            )
+            .unwrap();
+            let pgn = GAME_1.replace("[ECO \"B03\"]", "[ECO \"B03\"]\n[WhiteElo \"2478\"]");
+            conn.execute(
+                "INSERT INTO games VALUES (1, 'Open', 'Prag', '2025.02.27', '1', 'Vykouk, Jan', 'Lysenko, Yuri', '1-0', 'B03', ?1, 0)",
+                params![pgn],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let game = &store.list(Order::default(), 10, 0).unwrap()[0];
+        assert_eq!((game.white_elo, game.plies), (Some(2478), Some(3)));
+        drop(store);
+        // Opening it again leaves it as it is.
+        assert_eq!(Store::open(&path).unwrap().count().unwrap(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn update_rejects_more_than_one_game() {
         let mut store = Store::open_in_memory().unwrap();
         store.import_pgn(GAME_1).unwrap();
-        let id = store.list(10, 0).unwrap()[0].id;
+        let id = store.list(Order::default(), 10, 0).unwrap()[0].id;
         let two = format!("{GAME_1}\n{GAME_2}");
         assert!(store.update_pgn(id, &two).is_err());
     }
