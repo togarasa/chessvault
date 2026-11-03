@@ -485,49 +485,6 @@ tr.playable {
   color: var(--muted);
 }
 
-.welcome {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-width: 640px;
-}
-
-.welcome h2 {
-  margin: 0 0 4px;
-}
-
-.welcome .muted {
-  padding: 0;
-}
-
-button.recent {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px 12px;
-  text-align: left;
-  padding: 8px 12px;
-}
-
-button.recent .name {
-  font-weight: 600;
-}
-
-button.recent .where {
-  grid-column: 1;
-  color: var(--muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-button.recent .when {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: center;
-  color: var(--muted);
-  font-size: 12px;
-}
 
 .form input,
 .form select {
@@ -612,4 +569,97 @@ th.num {
   align-items: center;
   gap: 6px;
   color: var(--text);
+}
+
+.tiles-screen {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.tiles-screen h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.tiles-screen .muted {
+  padding: 12px 0 0;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px;
+  min-height: 128px;
+  text-align: left;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tile.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+
+.tile.mine {
+  border-width: 2px;
+}
+
+.tile.missing .tile-name,
+.tile.missing .tile-detail:first-of-type {
+  color: var(--muted);
+}
+
+/* A small chessboard as the database icon. */
+.tile-icon {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 6px;
+  border-radius: 4px;
+  background: repeating-conic-gradient(var(--accent) 0 25%, color-mix(in srgb, var(--accent) 25%, var(--panel)) 0 50%) 0 0 / 50% 50%;
+}
+
+.tile.mine .tile-icon {
+  background: repeating-conic-gradient(#b58863 0 25%, #f0d9b5 0 50%) 0 0 / 50% 50%;
+}
+
+.tile-name {
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-detail {
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-detail:first-of-type {
+  color: var(--text);
+}
+
+.tile.add {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.tile-plus {
+  font-size: 32px;
+  line-height: 1;
 }

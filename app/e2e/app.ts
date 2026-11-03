@@ -2,7 +2,7 @@ import { Browser, Page, test as base, chromium, expect } from "@playwright/test"
 import { ChildProcess, spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 /// The test build of the app, made by global-setup.ts.
 export const APP_EXE = resolve(import.meta.dirname, "../../target/e2e/debug/app.exe");
@@ -15,7 +15,9 @@ export type ChessVault = {
   page: Page;
   /// The copy of `fixtures/sample.pgn` for this test.
   pgn: string;
-  /// Opens a file the way a user does from the start screen's recent files.
+  /// A folder of its own for this test, deleted afterwards.
+  dir: string;
+  /// Opens a file the way a user does: by double-clicking its tile on the start screen.
   openFile: (path: string) => Promise<void>;
 };
 
@@ -55,16 +57,16 @@ export const test = base.extend<{ chessvault: ChessVault }>({
     const { app, browser, page } = await launch(dir);
 
     async function openFile(path: string) {
-      // The native Open window can't be driven, so put the file in the recent list and click it there.
+      // The native Open window can't be driven, so put the file in the recent list and open its tile.
       await page.evaluate((p) => {
         localStorage.setItem("chessvault.recent", JSON.stringify([{ path: p, openedAt: Date.now() }]));
       }, path);
       await page.reload();
-      await page.locator("button.recent").first().click();
+      await tile(page, basename(path)).dblclick();
       await expect(page.locator(".status")).toContainText(/Imported|Opened/);
     }
 
-    await use({ page, pgn, openFile });
+    await use({ page, pgn, dir, openFile });
 
     await browser.close().catch(() => {});
     app.kill();
@@ -81,6 +83,11 @@ export const test = base.extend<{ chessvault: ChessVault }>({
 });
 
 export { expect };
+
+/// The tile on the start screen whose name is `name`, e.g. "sample.pgn" or "My Games".
+export function tile(page: Page, name: string) {
+  return page.locator(".tile").filter({ has: page.locator(".tile-name").getByText(name, { exact: true }) });
+}
 
 /// Clicks one board square, e.g. "e2". The board shows White at the bottom.
 export async function clickSquare(page: Page, square: string) {

@@ -45,3 +45,23 @@ export function clearRecent(): RecentFile[] {
 export function fileName(path: string) {
   return path.split(/[\\/]/).pop() || path;
 }
+
+const MY_GAMES_KEY = "chessvault.myGames";
+
+/// The My Games database the user chose, or null before they create one.
+export function loadMyGames(): string | null {
+  try {
+    return localStorage.getItem(MY_GAMES_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveMyGames(path: string | null) {
+  try {
+    if (path) localStorage.setItem(MY_GAMES_KEY, path);
+    else localStorage.removeItem(MY_GAMES_KEY);
+  } catch {
+    // Without storage My Games has to be chosen again next time.
+  }
+}

@@ -164,6 +164,32 @@ pub fn add_game_to(path: &Path, pgn: &str) -> Result<()> {
     Ok(())
 }
 
+/// The number of games in a database or PGN file, read without changing or creating anything.
+/// A PGN file that has a database beside it from [`open_path`] counts that database's games.
+/// Returns `None` when the file doesn't exist.
+pub fn game_count(path: &Path) -> Result<Option<i64>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pgn")) {
+        let db_path = path.with_extension("sqlite");
+        if db_path.exists() {
+            return game_count(&db_path);
+        }
+        let text = fs::read_to_string(path)?;
+        let games = text.lines().filter(|l| l.trim_start_matches(['\u{feff}', ' ', '\t']).starts_with("[Event ")).count();
+        return Ok(Some(games as i64));
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let count = conn.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0)).map_err(|e| match e {
+        rusqlite::Error::SqliteFailure(failure, _) if failure.code == ErrorCode::NotADatabase => {
+            Error::NotADatabase(path.to_path_buf())
+        }
+        other => Error::Sql(other),
+    })?;
+    Ok(Some(count))
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A game as shown in lists and search results.
@@ -892,6 +918,28 @@ mod tests {
         assert!(find(Filter { event: "club".into(), result: "1-0".into(), ..Filter::default() }).is_empty());
         // LIKE wildcards in the text are taken literally.
         assert!(find(Filter { white: "%".into(), ..Filter::default() }).is_empty());
+    }
+
+    #[test]
+    fn game_count_reads_files_without_changing_them() {
+        let dir = temp_dir("count");
+        let pgn = dir.join("games.pgn");
+        fs::write(&pgn, format!("\u{feff}{GAME_1}\n{GAME_2}")).unwrap();
+        assert_eq!(game_count(&pgn).unwrap(), Some(2));
+        assert!(!dir.join("games.sqlite").exists());
+
+        // Once opened, the PGN file's database counts, edits included.
+        let mut opened = open_path(&pgn).unwrap();
+        opened.store.add_game(GAME_1).unwrap();
+        drop(opened);
+        assert_eq!(game_count(&pgn).unwrap(), Some(3));
+        assert_eq!(game_count(&dir.join("games.sqlite")).unwrap(), Some(3));
+
+        assert_eq!(game_count(&dir.join("missing.sqlite")).unwrap(), None);
+        assert!(!dir.join("missing.sqlite").exists());
+        fs::write(dir.join("notes.sqlite"), "These are notes, not a SQLite database file.").unwrap();
+        assert!(game_count(&dir.join("notes.sqlite")).is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

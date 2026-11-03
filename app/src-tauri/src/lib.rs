@@ -87,6 +87,13 @@ fn delete_game(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     with_store(&state, |store| store.delete_game(id).map_err(|e| e.to_string()))
 }
 
+/// The number of games in each file, for the database tiles; `None` for a file that is
+/// missing or can't be read. Nothing is created or changed.
+#[tauri::command]
+fn database_counts(paths: Vec<String>) -> Vec<Option<i64>> {
+    paths.iter().map(|p| db::game_count(Path::new(p)).ok().flatten()).collect()
+}
+
 /// Adds a game to another database or PGN file, creating it if needed.
 #[tauri::command]
 fn add_game_to(path: String, pgn: String) -> Result<(), String> {
@@ -187,6 +194,7 @@ pub fn run() {
             undo_game,
             delete_game,
             add_game_to,
+            database_counts,
             export_pgn,
             start_analysis,
             stop_analysis,

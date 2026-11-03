@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Key } from "chessground/types";
 import { Move, NormalMove, Role, SquareName } from "chessops/types";
 import { parseSquare, parseUci, squareRank } from "chessops/util";
@@ -9,7 +10,17 @@ import { Ask, ContextMenu, Dialog, MenuItem } from "./Dialog";
 import { EnginePanel } from "./EnginePanel";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { Notation } from "./Notation";
-import { RecentFile, addRecent, clearRecent, fileName, loadRecent, removeRecent } from "./recent";
+import { DatabaseTiles } from "./DatabaseTiles";
+import {
+  RecentFile,
+  addRecent,
+  clearRecent,
+  fileName,
+  loadMyGames,
+  loadRecent,
+  removeRecent,
+  saveMyGames,
+} from "./recent";
 import { EMPTY_FILTER, Filter, SearchDialog, describeFilter, playerFilter } from "./Search";
 import {
   AddMode,
@@ -126,6 +137,9 @@ function App() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [order, setOrder] = useState<Order>({ column: "id", descending: false });
   const [recent, setRecent] = useState<RecentFile[]>(loadRecent);
+  const [myGames, setMyGames] = useState<string | null>(loadMyGames);
+  /// Games in each file shown as a tile, by path.
+  const [counts, setCounts] = useState<Record<string, number | null>>({});
 
   /// The game on the board: its id (null until a new game is saved), its moves and the shown position.
   const [gameId, setGameId] = useState<number | null>(null);
@@ -180,6 +194,20 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [current, ask, menu]);
+
+  useEffect(() => {
+    if (isOpen) return;
+    const paths = [...(myGames ? [myGames] : []), ...recent.map((f) => f.path)];
+    let cancelled = false;
+    invoke<(number | null)[]>("database_counts", { paths })
+      .then((found) => {
+        if (!cancelled) setCounts(Object.fromEntries(paths.map((p, i) => [p, found[i]])));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, recent, myGames]);
 
   async function run(action: () => Promise<void>) {
     try {
@@ -238,6 +266,55 @@ function App() {
       setSearch("");
       setFilter(null);
       await loadGames(null, 0);
+    });
+  }
+
+  /// Goes back to the database tiles.
+  async function showDatabases() {
+    if (!(await confirmDiscard())) return;
+    showGame(null, null);
+    setIsOpen(false);
+    setStatus("Double-click a database to open it.");
+  }
+
+  /// Opens My Games, asking where to create it the first time or when `choose` is set.
+  async function openMyGames(choose = false) {
+    let path = myGames;
+    if (!path || choose) {
+      const picked = await saveFileDialog({
+        title: "Where to keep My Games",
+        defaultPath: path ?? "My Games.sqlite",
+        filters: [DATABASE_FILTER],
+      });
+      if (!picked) return;
+      path = picked;
+      saveMyGames(path);
+      setMyGames(path);
+    }
+    await openDatabase(path);
+  }
+
+  function tileMenu(path: string, isMyGames: boolean, x: number, y: number) {
+    setMenu({
+      x,
+      y,
+      items: [
+        { label: "Open", action: () => (isMyGames ? openMyGames() : openDatabase(path)) },
+        { label: "Show in folder", action: () => run(() => revealItemInDir(path)) },
+        "separator",
+        ...(isMyGames ? [{ label: "Choose another My Games database…", action: () => openMyGames(true) }] : []),
+        {
+          // Only the list forgets the file; it stays on disk.
+          label: "Remove from list",
+          action: () => {
+            setRecent(removeRecent(path));
+            if (isMyGames) {
+              saveMyGames(null);
+              setMyGames(null);
+            }
+          },
+        },
+      ],
     });
   }
 
@@ -584,6 +661,9 @@ function App() {
   return (
     <div className="app">
       <header className="toolbar">
+        <button onClick={showDatabases} disabled={!isOpen} title="Show all databases">
+          Databases
+        </button>
         <button onClick={() => openDatabase()} title="Open a PGN file or a ChessVault database">
           Open…
         </button>
@@ -621,203 +701,205 @@ function App() {
         )}
       </header>
 
-      <div className="search">
-        <input
-          placeholder="Search by player name"
-          value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && applyFilter(search.trim() ? playerFilter(search.trim()) : null)}
-          disabled={!isOpen}
-        />
-        <button onClick={() => applyFilter(search.trim() ? playerFilter(search.trim()) : null)} disabled={!isOpen}>
-          Search
-        </button>
-        <button onClick={() => setSearching(true)} disabled={!isOpen} title="Search by players, result, ECO, date, Elo…">
-          Search games…
-        </button>
-        {filter && (
-          <span className="filter-summary">
-            Showing: {describeFilter(filter)}
-            <button
-              onClick={() => {
-                setSearch("");
-                applyFilter(null);
-              }}
-            >
-              Show all games
-            </button>
-          </span>
-        )}
-      </div>
+      {isOpen && (
+        <div className="search">
+          <input
+            placeholder="Search by player name"
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === "Enter" && applyFilter(search.trim() ? playerFilter(search.trim()) : null)}
+            disabled={!isOpen}
+          />
+          <button onClick={() => applyFilter(search.trim() ? playerFilter(search.trim()) : null)} disabled={!isOpen}>
+            Search
+          </button>
+          <button onClick={() => setSearching(true)} disabled={!isOpen} title="Search by players, result, ECO, date, Elo…">
+            Search games…
+          </button>
+          {filter && (
+            <span className="filter-summary">
+              Showing: {describeFilter(filter)}
+              <button
+                onClick={() => {
+                  setSearch("");
+                  applyFilter(null);
+                }}
+              >
+                Show all games
+              </button>
+            </span>
+          )}
+        </div>
+      )}
 
-      <div className="panes">
-        <section
-          className="games"
-          onScroll={(e) => {
-            const list = e.currentTarget;
-            if (list.scrollTop + list.clientHeight >= list.scrollHeight - 200) loadMore();
-          }}
-        >
-          <table>
-            <thead>
-              <tr>
-                {COLUMNS.map((c) => (
-                  <th
-                    key={c.key}
-                    className={[c.className, "sortable", order.column === c.key ? "sorted" : ""].join(" ")}
-                    onClick={() => isOpen && sortBy(c.key)}
-                    title={`Sort by ${c.label}`}
-                  >
-                    {c.label}
-                    {order.column === c.key && (order.descending ? " ▼" : " ▲")}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {games.map((g) => (
-                <tr
-                  key={g.id}
-                  className={gameId === g.id ? "active" : ""}
-                  onClick={() => select(g.id)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      items: [
-                        { label: "Open game", action: () => select(g.id) },
-                        { label: "Delete game…", action: () => deleteGame(g) },
-                      ],
-                    });
-                  }}
-                >
+      {isOpen ? (
+        <div className="panes">
+          <section
+            className="games"
+            onScroll={(e) => {
+              const list = e.currentTarget;
+              if (list.scrollTop + list.clientHeight >= list.scrollHeight - 200) loadMore();
+            }}
+          >
+            <table>
+              <thead>
+                <tr>
                   {COLUMNS.map((c) => (
-                    <td key={c.key} className={c.className}>
-                      {c.value(g)}
-                    </td>
+                    <th
+                      key={c.key}
+                      className={[c.className, "sortable", order.column === c.key ? "sorted" : ""].join(" ")}
+                      onClick={() => isOpen && sortBy(c.key)}
+                      title={`Sort by ${c.label}`}
+                    >
+                      {c.label}
+                      {order.column === c.key && (order.descending ? " ▼" : " ▲")}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {isOpen && games.length === 0 && <p className="muted">No games.</p>}
-          {isOpen && games.length > 0 && (
-            <p className="muted list-end">
-              {hasMore ? (
-                <button onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? "Loading…" : `Showing ${games.length} games, load more`}
-                </button>
-              ) : (
-                `${games.length} ${games.length === 1 ? "game" : "games"}`
-              )}
-            </p>
-          )}
-        </section>
-
-        <section className="game">
-          {tree && current ? (
-            <>
-              <div className="headers">
-                {HEADER_FIELDS.map((name) => (
-                  <label key={name}>
-                    {name}
-                    <input value={tree.headers.get(name) ?? ""} onChange={(e) => setHeader(name, e.currentTarget.value)} />
-                  </label>
-                ))}
-                <label>
-                  Result
-                  <select value={tree.headers.get("Result") ?? "*"} onChange={(e) => setHeader("Result", e.currentTarget.value)}>
-                    {RESULTS.map((r) => (
-                      <option key={r}>{r}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="gameview">
-                <div className="boardcol">
-                  <Board fen={fen} revision={revision} onMove={onBoardMove} />
-                  <div className="controls">
-                    <button onClick={() => setCurrent(tree.root)} disabled={!current.parent}>
-                      |&lt;
-                    </button>
-                    <button onClick={() => current.parent && setCurrent(current.parent)} disabled={!current.parent}>
-                      &lt;
-                    </button>
-                    <button onClick={() => setCurrent(current.children[0])} disabled={!current.children[0]}>
-                      &gt;
-                    </button>
-                    <button
-                      onClick={() => {
-                        let n = current;
-                        while (n.children[0]) n = n.children[0];
-                        setCurrent(n);
-                      }}
-                      disabled={!current.children[0]}
-                    >
-                      &gt;|
-                    </button>
-                  </div>
-                </div>
-                <div className="sidecol">
-                  <Notation root={tree.root} current={current} onSelect={setCurrent} onMenu={openMenu} />
-                  <div className="actions">
-                    <button onClick={save} disabled={!dirty}>
-                      {gameId === null ? "Save as new game" : "Save"}
-                    </button>
-                    <button onClick={undo} disabled={gameId === null}>
-                      Undo last save
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (gameId === null) return;
-                        const header = (name: string) => tree.headers.get(name) ?? "?";
-                        deleteGame({
-                          id: gameId,
-                          white: header("White"),
-                          black: header("Black"),
-                          date: header("Date"),
-                        });
-                      }}
-                      disabled={gameId === null}
-                    >
-                      Delete game
-                    </button>
-                    {dirty && <span className="muted">Unsaved changes</span>}
-                  </div>
-                  <EnginePanel fen={fen} />
-                  <ExplorerPanel
-                    fen={fen}
-                    onPlay={(uci) => {
-                      const move = parseUci(uci);
-                      if (move) play(move);
+              </thead>
+              <tbody>
+                {games.map((g) => (
+                  <tr
+                    key={g.id}
+                    className={gameId === g.id ? "active" : ""}
+                    onClick={() => select(g.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        items: [
+                          { label: "Open game", action: () => select(g.id) },
+                          { label: "Delete game…", action: () => deleteGame(g) },
+                        ],
+                      });
                     }}
-                  />
+                  >
+                    {COLUMNS.map((c) => (
+                      <td key={c.key} className={c.className}>
+                        {c.value(g)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {isOpen && games.length === 0 && <p className="muted">No games.</p>}
+            {isOpen && games.length > 0 && (
+              <p className="muted list-end">
+                {hasMore ? (
+                  <button onClick={loadMore} disabled={loadingMore}>
+                    {loadingMore ? "Loading…" : `Showing ${games.length} games, load more`}
+                  </button>
+                ) : (
+                  `${games.length} ${games.length === 1 ? "game" : "games"}`
+                )}
+              </p>
+            )}
+          </section>
+
+          <section className="game">
+            {tree && current ? (
+              <>
+                <div className="headers">
+                  {HEADER_FIELDS.map((name) => (
+                    <label key={name}>
+                      {name}
+                      <input value={tree.headers.get(name) ?? ""} onChange={(e) => setHeader(name, e.currentTarget.value)} />
+                    </label>
+                  ))}
+                  <label>
+                    Result
+                    <select value={tree.headers.get("Result") ?? "*"} onChange={(e) => setHeader("Result", e.currentTarget.value)}>
+                      {RESULTS.map((r) => (
+                        <option key={r}>{r}</option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
-              </div>
-              <details className="source">
-                <summary>PGN source</summary>
-                <textarea value={draft} onChange={(e) => setDraft(e.currentTarget.value)} spellCheck={false} />
-                <p className="muted">Edits here are saved as typed; moves made on the board replace them.</p>
-              </details>
-            </>
-          ) : isOpen ? (
-            <p className="muted">Select a game, or start a new one.</p>
-          ) : (
-            <div className="welcome">
-              <h2>Recent files</h2>
-              {recent.length === 0 && <p className="muted">Files you open will be listed here.</p>}
-              {recent.map((f) => (
-                <button key={f.path} className="recent" onClick={() => openDatabase(f.path)} title={f.path}>
-                  <span className="name">{fileName(f.path)}</span>
-                  <span className="where">{f.path}</span>
-                  <span className="when">{new Date(f.openedAt).toLocaleString()}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
+                <div className="gameview">
+                  <div className="boardcol">
+                    <Board fen={fen} revision={revision} onMove={onBoardMove} />
+                    <div className="controls">
+                      <button onClick={() => setCurrent(tree.root)} disabled={!current.parent}>
+                        |&lt;
+                      </button>
+                      <button onClick={() => current.parent && setCurrent(current.parent)} disabled={!current.parent}>
+                        &lt;
+                      </button>
+                      <button onClick={() => setCurrent(current.children[0])} disabled={!current.children[0]}>
+                        &gt;
+                      </button>
+                      <button
+                        onClick={() => {
+                          let n = current;
+                          while (n.children[0]) n = n.children[0];
+                          setCurrent(n);
+                        }}
+                        disabled={!current.children[0]}
+                      >
+                        &gt;|
+                      </button>
+                    </div>
+                  </div>
+                  <div className="sidecol">
+                    <Notation root={tree.root} current={current} onSelect={setCurrent} onMenu={openMenu} />
+                    <div className="actions">
+                      <button onClick={save} disabled={!dirty}>
+                        {gameId === null ? "Save as new game" : "Save"}
+                      </button>
+                      <button onClick={undo} disabled={gameId === null}>
+                        Undo last save
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (gameId === null) return;
+                          const header = (name: string) => tree.headers.get(name) ?? "?";
+                          deleteGame({
+                            id: gameId,
+                            white: header("White"),
+                            black: header("Black"),
+                            date: header("Date"),
+                          });
+                        }}
+                        disabled={gameId === null}
+                      >
+                        Delete game
+                      </button>
+                      {dirty && <span className="muted">Unsaved changes</span>}
+                    </div>
+                    <EnginePanel fen={fen} />
+                    <ExplorerPanel
+                      fen={fen}
+                      onPlay={(uci) => {
+                        const move = parseUci(uci);
+                        if (move) play(move);
+                      }}
+                    />
+                  </div>
+                </div>
+                <details className="source">
+                  <summary>PGN source</summary>
+                  <textarea value={draft} onChange={(e) => setDraft(e.currentTarget.value)} spellCheck={false} />
+                  <p className="muted">Edits here are saved as typed; moves made on the board replace them.</p>
+                </details>
+              </>
+            ) : (
+              <p className="muted">Select a game, or start a new one.</p>
+            )}
+          </section>
+        </div>
+      ) : (
+        <DatabaseTiles
+          files={recent}
+          myGames={myGames}
+          counts={counts}
+          onOpen={(path) => openDatabase(path)}
+          onMyGames={() => openMyGames()}
+          onAdd={() => openDatabase()}
+          onMenu={tileMenu}
+        />
+      )}
 
       <footer className="status">{status}</footer>
       {ask && <Dialog ask={ask} />}

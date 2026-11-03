@@ -1,0 +1,8 @@
+# Keep LF line endings in the repository and in working copies on every OS.
+* text=auto eol=lf
+
+# Binary files are never converted.
+*.png binary
+*.ico binary
+*.icns binary
+*.sqlite binary
