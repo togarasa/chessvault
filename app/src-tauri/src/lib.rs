@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chessvault_core::db::{self, Game, GameSummary, Order, Store};
+use chessvault_core::db::{self, Filter, Game, GameSummary, Order, Store};
 use chessvault_core::engine::{Engine, EngineLine};
 use chessvault_core::online::lichess::{self, Database, Explorer};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -57,13 +57,13 @@ fn list_games(order: Order, limit: i64, offset: i64, state: State<'_, AppState>)
 
 #[tauri::command]
 fn search_games(
-    player: String,
+    filter: Filter,
     order: Order,
     limit: i64,
     offset: i64,
     state: State<'_, AppState>,
 ) -> Result<Vec<GameSummary>, String> {
-    with_store(&state, |store| store.search_player(&player, order, limit, offset).map_err(|e| e.to_string()))
+    with_store(&state, |store| store.search(&filter, order, limit, offset).map_err(|e| e.to_string()))
 }
 
 #[tauri::command]

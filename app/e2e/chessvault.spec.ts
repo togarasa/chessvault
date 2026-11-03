@@ -53,7 +53,7 @@ test("searching by player finds their games", async ({ chessvault: { page, pgn, 
   await page.getByPlaceholder("Search by player name").press("Enter");
   await expect(rows(page)).toHaveCount(2);
   await page.getByPlaceholder("Search by player name").fill("");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(rows(page)).toHaveCount(3);
 });
 

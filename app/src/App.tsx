@@ -10,6 +10,7 @@ import { EnginePanel } from "./EnginePanel";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { Notation } from "./Notation";
 import { RecentFile, addRecent, clearRecent, fileName, loadRecent, removeRecent } from "./recent";
+import { EMPTY_FILTER, Filter, SearchDialog, describeFilter, playerFilter } from "./Search";
 import {
   AddMode,
   GameTree,
@@ -114,6 +115,9 @@ function newGamePgn() {
 function App() {
   const [dbPath, setDbPath] = useState("");
   const [search, setSearch] = useState("");
+  /// The search the game list shows, or null for all games.
+  const [filter, setFilter] = useState<Filter | null>(null);
+  const [searching, setSearching] = useState(false);
   const [games, setGames] = useState<GameSummary[]>([]);
   const [status, setStatus] = useState("Open a database to begin.");
   const [isOpen, setIsOpen] = useState(false);
@@ -231,7 +235,9 @@ function App() {
           ? `Imported ${opened.imported} games into ${opened.database}.`
           : `Opened ${opened.database} (${opened.games} games).`,
       );
-      await loadGames(search, 0);
+      setSearch("");
+      setFilter(null);
+      await loadGames(null, 0);
     });
   }
 
@@ -285,17 +291,23 @@ function App() {
     });
   }
 
-  function fetchGames(query: string, sort: Order, limit: number, offset: number) {
-    return query.trim()
-      ? invoke<GameSummary[]>("search_games", { player: query.trim(), order: sort, limit, offset })
+  function fetchGames(find: Filter | null, sort: Order, limit: number, offset: number) {
+    return find
+      ? invoke<GameSummary[]>("search_games", { filter: find, order: sort, limit, offset })
       : invoke<GameSummary[]>("list_games", { order: sort, limit, offset });
+  }
+
+  /// Shows the games that match `find`, or all games when it is null.
+  async function applyFilter(find: Filter | null) {
+    setFilter(find);
+    await run(() => loadGames(find, 0));
   }
 
   /// Loads the list from the top again, keeping as many rows as are loaded now so a refresh
   /// after saving or deleting doesn't lose the place.
-  async function loadGames(query = search, keep = games.length, sort = order) {
+  async function loadGames(find = filter, keep = games.length, sort = order) {
     const limit = Math.max(PAGE_SIZE, keep);
-    const found = await fetchGames(query, sort, limit, 0);
+    const found = await fetchGames(find, sort, limit, 0);
     setGames(found);
     setHasMore(found.length === limit);
   }
@@ -304,7 +316,7 @@ function App() {
     if (!hasMore || loadingMore) return;
     setLoadingMore(true);
     await run(async () => {
-      const found = await fetchGames(search, order, PAGE_SIZE, games.length);
+      const found = await fetchGames(filter, order, PAGE_SIZE, games.length);
       setGames((loaded) => [...loaded, ...found]);
       setHasMore(found.length === PAGE_SIZE);
     });
@@ -368,7 +380,7 @@ function App() {
   async function sortBy(column: SortColumn) {
     const next = { column, descending: order.column === column && !order.descending };
     setOrder(next);
-    await run(() => loadGames(search, 0, next));
+    await run(() => loadGames(filter, 0, next));
   }
 
   /// Deletes a game from the database after asking.
@@ -614,12 +626,28 @@ function App() {
           placeholder="Search by player name"
           value={search}
           onChange={(e) => setSearch(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && run(() => loadGames(search, 0))}
+          onKeyDown={(e) => e.key === "Enter" && applyFilter(search.trim() ? playerFilter(search.trim()) : null)}
           disabled={!isOpen}
         />
-        <button onClick={() => run(() => loadGames(search, 0))} disabled={!isOpen}>
+        <button onClick={() => applyFilter(search.trim() ? playerFilter(search.trim()) : null)} disabled={!isOpen}>
           Search
         </button>
+        <button onClick={() => setSearching(true)} disabled={!isOpen} title="Search by players, result, ECO, date, Elo…">
+          Search games…
+        </button>
+        {filter && (
+          <span className="filter-summary">
+            Showing: {describeFilter(filter)}
+            <button
+              onClick={() => {
+                setSearch("");
+                applyFilter(null);
+              }}
+            >
+              Show all games
+            </button>
+          </span>
+        )}
       </div>
 
       <div className="panes">
@@ -793,6 +821,17 @@ function App() {
 
       <footer className="status">{status}</footer>
       {ask && <Dialog ask={ask} />}
+      {searching && (
+        <SearchDialog
+          initial={filter ?? EMPTY_FILTER}
+          onClose={() => setSearching(false)}
+          onSearch={(find) => {
+            setSearching(false);
+            setSearch("");
+            applyFilter(describeFilter(find) === "all games" ? null : find);
+          }}
+        />
+      )}
       {menu && <ContextMenu {...menu} close={() => setMenu(null)} />}
     </div>
   );

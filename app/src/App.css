@@ -568,3 +568,48 @@ th.num {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.filter-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+  color: var(--accent);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.search-dialog {
+  width: min(620px, 92vw);
+}
+
+.search-dialog fieldset {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0;
+  padding: 8px 10px 10px;
+}
+
+.search-dialog legend {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.search-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.search-dialog label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}

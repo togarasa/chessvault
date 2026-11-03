@@ -185,6 +185,89 @@ pub struct GameSummary {
     pub plies: Option<i64>,
 }
 
+/// What to look for in a game search. Empty fields match every game; text fields match any
+/// part of the value, ignoring case.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Filter {
+    pub white: String,
+    pub black: String,
+    /// Also find the games where the names are the other way round.
+    pub ignore_colour: bool,
+    /// "1-0", "0-1", "1/2-1/2" or "*"; empty for any.
+    pub result: String,
+    /// ECO codes from and to, both included; "B2" to "B9" covers B20 to B99.
+    pub eco_from: String,
+    pub eco_to: String,
+    /// Dates from and to, both included, as "2024" or "2024.06" or "2024.06.15".
+    pub date_from: String,
+    pub date_to: String,
+    pub min_white_elo: Option<i64>,
+    pub min_black_elo: Option<i64>,
+    pub event: String,
+    pub site: String,
+}
+
+impl Filter {
+    /// The SQL condition and its values, numbered from ?1.
+    fn sql(&self) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+        let mut parts: Vec<String> = Vec::new();
+        let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        /// Adds a value and returns its placeholder.
+        fn value(v: Box<dyn rusqlite::ToSql>, values: &mut Vec<Box<dyn rusqlite::ToSql>>) -> String {
+            values.push(v);
+            format!("?{}", values.len())
+        }
+        let (white, black) = (self.white.trim(), self.black.trim());
+        if !white.is_empty() || !black.is_empty() {
+            let w = value(Box::new(like_pattern(white)), &mut values);
+            let b = value(Box::new(like_pattern(black)), &mut values);
+            let as_given = format!("(white LIKE {w} ESCAPE '\\' AND black LIKE {b} ESCAPE '\\')");
+            parts.push(if self.ignore_colour {
+                format!("({as_given} OR (white LIKE {b} ESCAPE '\\' AND black LIKE {w} ESCAPE '\\'))")
+            } else {
+                as_given
+            });
+        }
+        for (column, text) in [("event", &self.event), ("site", &self.site)] {
+            if !text.trim().is_empty() {
+                let v = value(Box::new(like_pattern(text.trim())), &mut values);
+                parts.push(format!("{column} LIKE {v} ESCAPE '\\'"));
+            }
+        }
+        if !self.result.trim().is_empty() {
+            let v = value(Box::new(self.result.trim().to_string()), &mut values);
+            parts.push(format!("result = {v}"));
+        }
+        // "~" sorts after digits, letters, '.' and '?', so "B9~" is above every B9x code
+        // and "2026~" above every 2026 date.
+        for (column, from, to) in [("eco", &self.eco_from, &self.eco_to), ("date", &self.date_from, &self.date_to)] {
+            if !from.trim().is_empty() {
+                let v = value(Box::new(from.trim().to_uppercase()), &mut values);
+                parts.push(format!("{column} >= {v}"));
+            }
+            if !to.trim().is_empty() {
+                let v = value(Box::new(format!("{}~", to.trim().to_uppercase())), &mut values);
+                parts.push(format!("{column} <= {v}"));
+            }
+        }
+        for (column, min) in [("white_elo", self.min_white_elo), ("black_elo", self.min_black_elo)] {
+            if let Some(min) = min {
+                let v = value(Box::new(min), &mut values);
+                parts.push(format!("{column} >= {v}"));
+            }
+        }
+        let condition = if parts.is_empty() { "1".to_string() } else { parts.join(" AND ") };
+        (condition, values)
+    }
+}
+
+/// A LIKE pattern that finds `text` anywhere, with LIKE's own wildcards escaped.
+fn like_pattern(text: &str) -> String {
+    let escaped = text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
 /// A column the game list can be sorted by.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,12 +471,22 @@ impl Store {
 
     /// Finds games where `name` appears as either player, in `order`, skipping the first `offset` matches.
     pub fn search_player(&self, name: &str, order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
-        let pattern = format!("%{name}%");
+        let filter = Filter { white: name.to_string(), ignore_colour: true, ..Filter::default() };
+        self.search(&filter, order, limit, offset)
+    }
+
+    /// Finds the games that match every field set in `filter`, in `order`, skipping the first `offset`.
+    pub fn search(&self, filter: &Filter, order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
+        let (condition, mut values) = filter.sql();
+        values.push(Box::new(limit));
+        values.push(Box::new(offset));
+        let n = values.len();
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {SUMMARY_COLUMNS} FROM games WHERE white LIKE ?1 OR black LIKE ?1 {} LIMIT ?2 OFFSET ?3",
-            order.sql()
+            "SELECT {SUMMARY_COLUMNS} FROM games WHERE {condition} {} LIMIT ?{} OFFSET ?{n}",
+            order.sql(),
+            n - 1
         ))?;
-        let rows = stmt.query_map(params![pattern, limit, offset], summary_row)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), summary_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -767,6 +860,38 @@ mod tests {
         assert_eq!(by(SortColumn::WhiteElo, true), ["Rakhmangulova, Anastasiya", "Vykouk, Jan"]);
         let found = store.search_player("Lysenko", Order { column: SortColumn::Plies, descending: true }, 10, 0);
         assert_eq!(found.unwrap()[0].plies, Some(3));
+    }
+
+    #[test]
+    fn search_matches_every_field_that_is_set() {
+        let mut store = Store::open_in_memory().unwrap();
+        let rated = GAME_2.replace("[Result \"0-1\"]", "[Result \"0-1\"]\n[ECO \"D02\"]\n[WhiteElo \"2100\"]");
+        store.import_pgn(&format!("{GAME_1}\n{rated}")).unwrap();
+        let find = |filter: Filter| -> Vec<String> {
+            let found = store.search(&filter, Order::default(), 10, 0).unwrap();
+            found.into_iter().map(|g| g.white).collect()
+        };
+        let (vykouk, rakh) = ("Vykouk, Jan".to_string(), "Rakhmangulova, Anastasiya".to_string());
+
+        assert_eq!(find(Filter::default()).len(), 2);
+        assert_eq!(find(Filter { white: "vykouk".into(), ..Filter::default() }), [vykouk.clone()]);
+        // Lysenko had Black in both games; with colours kept, searching him as White finds none.
+        assert!(find(Filter { white: "Lysenko".into(), ..Filter::default() }).is_empty());
+        assert_eq!(find(Filter { white: "Lysenko".into(), ignore_colour: true, ..Filter::default() }).len(), 2);
+        assert_eq!(
+            find(Filter { white: "Lysenko".into(), black: "Vykouk".into(), ignore_colour: true, ..Filter::default() }),
+            [vykouk.clone()]
+        );
+        assert_eq!(find(Filter { result: "0-1".into(), ..Filter::default() }), [rakh.clone()]);
+        assert_eq!(find(Filter { eco_from: "b".into(), eco_to: "B0".into(), ..Filter::default() }), [vykouk.clone()]);
+        assert_eq!(find(Filter { eco_from: "C00".into(), ..Filter::default() }), [rakh.clone()]);
+        assert_eq!(find(Filter { date_from: "2024".into(), ..Filter::default() }), [vykouk.clone()]);
+        assert_eq!(find(Filter { date_to: "2023.06".into(), ..Filter::default() }), [rakh.clone()]);
+        assert_eq!(find(Filter { min_white_elo: Some(2000), ..Filter::default() }), [rakh.clone()]);
+        assert_eq!(find(Filter { event: "club".into(), site: "bay".into(), ..Filter::default() }), [rakh.clone()]);
+        assert!(find(Filter { event: "club".into(), result: "1-0".into(), ..Filter::default() }).is_empty());
+        // LIKE wildcards in the text are taken literally.
+        assert!(find(Filter { white: "%".into(), ..Filter::default() }).is_empty());
     }
 
     #[test]
