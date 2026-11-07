@@ -12,7 +12,11 @@ An open-source chess database and analysis tool for Windows and Linux, written i
 ## Tests
 
 - Core library and CLI: `cargo test --workspace`
+- Desktop app, unit and component tests: `pnpm test` in `app/`; architecture rules: `pnpm test:arch`
 - Desktop app, end to end (Windows): `pnpm test:e2e` in `app/`. Playwright drives the real app through WebView2's debugging port, with its own profile and a copy of `app/e2e/fixtures/sample.pgn`. The first run builds a test copy of the app into `target/e2e`, which takes a few minutes.
+- Coverage (at least 80% of branches): `node scripts/rust-coverage.mjs` (needs `rustup toolchain install nightly`) and `pnpm test:coverage` in `app/`.
+
+See `docs/ARCHITECTURE.md` for the layers and the test kinds.
 
 ## Disclaimer
 

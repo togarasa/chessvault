@@ -343,43 +343,4 @@ mod tests {
         let result = Engine::start(Path::new("no/such/engine.exe"), |_| {});
         assert!(result.is_err());
     }
-
-    /// Runs only when asked: `CHESSVAULT_ENGINE=<path> cargo test -- --ignored`.
-    #[test]
-    #[ignore = "needs a UCI engine at the path in CHESSVAULT_ENGINE"]
-    fn analyzes_with_a_real_engine_and_switches_positions() {
-        use std::sync::mpsc;
-        use std::time::{Duration, Instant};
-
-        let path = std::env::var("CHESSVAULT_ENGINE").expect("set CHESSVAULT_ENGINE");
-        let (tx, rx) = mpsc::channel();
-        let mut engine = Engine::start(Path::new(&path), move |line| {
-            let _ = tx.send(line);
-        })
-        .unwrap();
-
-        engine.analyze(START).unwrap();
-        thread::sleep(Duration::from_millis(300));
-        engine.analyze(AFTER_E4).unwrap();
-        thread::sleep(Duration::from_millis(300));
-        while rx.try_recv().is_ok() {}
-
-        // Every line from now on must be for the position after 1. e4.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut seen = 0;
-        while Instant::now() < deadline {
-            if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
-                let reparsed = SanPlus::from_ascii(line.moves[0].as_bytes()).unwrap();
-                let pos: Chess = Fen::from_ascii(AFTER_E4.as_bytes())
-                    .unwrap()
-                    .into_position(CastlingMode::Standard)
-                    .unwrap();
-                assert!(reparsed.san.to_move(&pos).is_ok(), "{line:?} is not for 1. e4");
-                assert!(line.multipv >= 1 && line.multipv <= LINES);
-                seen += 1;
-            }
-        }
-        assert!(seen > 0, "the engine reported no lines");
-        engine.stop().unwrap();
-    }
 }

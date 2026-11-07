@@ -75,9 +75,19 @@ dependency-cruiser checks these rules, plus no circular imports and no unused mo
 | Kind | Where | Run |
 |---|---|---|
 | Rust unit tests | next to the code (`#[cfg(test)]`) | `cargo test --workspace` |
+| Rust integration tests | `crates/core/tests/engine.rs` (against the fake UCI engine in `tests/support/`), `crates/cli/tests/cli.rs` (runs the `chessvault` command) | `cargo test --workspace` |
 | Rust architecture tests | `crates/core/tests/architecture.rs` | `cargo test --workspace` |
-| Frontend unit tests | `app/src/*.test.ts` | `pnpm test` in `app/` |
+| Frontend unit and component tests | `app/src/*.test.ts(x)`: logic, `api.ts` checked against the Rust command list, hooks, and screens rendered with Testing Library and a mocked `api.ts` | `pnpm test` in `app/` |
 | Frontend architecture tests | `app/.dependency-cruiser.cjs` | `pnpm test:arch` in `app/` |
 | End-to-end tests | `app/e2e/` | `pnpm test:e2e` in `app/` (Windows) |
 
-Coverage target: at least 80% of branches.
+Tests that need the outside world only run on request: a real engine
+(`CHESSVAULT_ENGINE=<path> cargo test -- --ignored`) and the live Lichess explorer.
+
+### Coverage
+
+At least 80% branch coverage, checked by:
+
+- Rust: `node scripts/rust-coverage.mjs` (branch coverage needs the nightly toolchain; the Tauri
+  commands in `app/src-tauri` are thin and covered by the e2e tests instead).
+- Frontend: `pnpm test:coverage` in `app/`, which fails below 80%.

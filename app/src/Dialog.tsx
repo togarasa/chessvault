@@ -43,7 +43,11 @@ export function Dialog({ ask }: { ask: Ask }) {
               <label key={f.name}>
                 {f.name}
                 {f.options ? (
-                  <select value={values[f.name]} onChange={(e) => setValues({ ...values, [f.name]: e.currentTarget.value })}>
+                  <select
+                    aria-label={f.name}
+                    value={values[f.name]}
+                    onChange={(e) => setValues({ ...values, [f.name]: e.currentTarget.value })}
+                  >
                     {f.options.map((o) => (
                       <option key={o}>{o}</option>
                     ))}
