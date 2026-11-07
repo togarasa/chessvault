@@ -28,6 +28,13 @@ module.exports = {
       to: { path: ["^src/use[A-Z]", "\\.tsx$"] },
     },
     {
+      name: "screens-use-hooks-for-the-backend",
+      comment: "Screens show state; they reach the backend through hooks (App.tsx, which runs the file operations, may call api.ts).",
+      severity: "error",
+      from: { path: "\\.tsx$", pathNot: ["^src/App\\.tsx$", "\\.test\\.tsx$"] },
+      to: { path: "^src/api\\.ts$" },
+    },
+    {
       name: "hooks-do-not-render",
       comment: "Hooks hold state and call api.ts; they don't import screens (only Dialog.tsx for its types).",
       severity: "error",

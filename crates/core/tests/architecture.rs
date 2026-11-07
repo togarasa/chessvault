@@ -65,13 +65,42 @@ fn the_cli_and_the_app_are_adapters_over_core() {
     assert!(!app.contains(&"chessvault-cli".to_string()), "the app must not depend on the CLI");
 }
 
-/// The source of a core module without its unit tests.
+/// The source of a core module without its unit tests, with the paths it uses spelled out.
 fn module_source(file: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
     let source = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    match source.find("#[cfg(test)]") {
-        Some(tests) => source[..tests].to_string(),
-        None => source,
+    let code = match source.find("#[cfg(test)]") {
+        Some(tests) => &source[..tests],
+        None => &source,
+    };
+    spell_out_paths(code)
+}
+
+/// `code` with `super::` read as `crate::`, and grouped imports like `use std::{fs, process}`
+/// added as `std::fs` and `std::process`, so the rules can't be passed by writing a path differently.
+fn spell_out_paths(code: &str) -> String {
+    let mut spelled = code.replace("super::", "crate::");
+    for (start, _) in code.match_indices("::{") {
+        let is_path = |c: char| c.is_alphanumeric() || c == '_' || c == ':';
+        let prefix_start = code[..start].rfind(|c: char| !is_path(c)).map_or(0, |i| i + 1);
+        let prefix = code[prefix_start..start].replace("super", "crate");
+        let Some(end) = code[start..].find('}') else { continue };
+        for item in code[start + 3..start + end].split(',') {
+            let first = item.trim().split("::").next().unwrap_or("").trim();
+            if !first.is_empty() {
+                spelled.push('\n');
+                spelled.push_str(&format!("{prefix}::{first}"));
+            }
+        }
+    }
+    spelled
+}
+
+#[test]
+fn grouped_imports_and_super_paths_are_spelled_out() {
+    let spelled = spell_out_paths("use std::{fs, process::Command};\nuse super::db;\nuse super::{engine};\n");
+    for path in ["std::fs", "std::process", "crate::db", "crate::engine"] {
+        assert!(spelled.contains(path), "{path} in {spelled}");
     }
 }
 
@@ -105,7 +134,10 @@ fn every_core_module_is_covered_by_these_rules() {
     let mut modules: Vec<String> = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
         .expect("lib.rs")
         .lines()
-        .filter_map(|l| l.trim().strip_prefix("pub mod ")?.strip_suffix(';').map(str::to_string))
+        .filter_map(|l| {
+            let l = l.trim();
+            l.strip_prefix("pub mod ").or_else(|| l.strip_prefix("mod "))?.strip_suffix(';').map(str::to_string)
+        })
         .collect();
     modules.sort();
     assert_eq!(modules, ["convert", "db", "engine", "online", "validate"]);
