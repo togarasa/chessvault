@@ -22,26 +22,24 @@ analyse with Stockfish, use the Lichess explorer, and later import from Chess.co
 | End-to-end tests driving the real app (Playwright) | 2026-11-02 | `cd5d13c` |
 | Search window: players, result, ECO, date, Elo, event, site | 2026-11-03 | `07d2868` |
 | Database tiles start screen with My Games; LF line endings | 2026-11-03 | `32c2227` |
+| Engineering foundation: working rules, architecture doc and tests, `App.tsx` split into layers, 80% branch coverage, user guide with screenshots and videos, adversarial review with 20 findings fixed ([review](reviews/2026-11-07-engineering-foundation.md)) | 2026-11-07 | `2e42e44`–`65dabfc` |
 
 ## Next
 
-1. **Engineering foundation** — added 2026-11-07 with the project's working rules (`CLAUDE.md`).
-   Everything later builds on it, so it comes first.
-   - `docs/ARCHITECTURE.md` and architecture tests (Rust dependency rules; frontend import rules with dependency-cruiser).
-   - Clean-code refactor of `app/src/App.tsx` (over 900 lines): split it into components and hooks (game list, game view, toolbar, dialogs) without changing behaviour; the e2e tests guard this.
-   - Coverage measurement (cargo-llvm-cov, Vitest coverage) and tests up to at least 80% branch coverage, with edge cases. Frontend logic (`tree.ts`, `Search.tsx`, `recent.ts`) gets Vitest unit tests.
-   - User guide skeleton in `docs/user/` with screenshots and short videos of the existing features.
-   - Adversarial review of the existing code, findings verified before fixing.
-2. **Open ChessBase databases in the app** — `.cbh` and `.cbv` in Open… and the tiles; games converted once into `<name>.sqlite` beside the original (as for PGN), with progress; ChessBase files stay read-only. Check against `MyPGNDownloads.cbh` (1,417 games matched before).
-3. **Game window extras** — flip the board, evaluation bar, click an engine line to play it, keyboard shortcuts.
-4. **Ribbon** — the toolbar grouped into tabs (File, Home, Analysis, Lichess).
-5. **Linux build and CI** — GitHub Actions: tests on Windows and Linux on every push; Linux e2e approach to be decided (WebView2 debugging is Windows-only).
-6. **First release (v0.1.0)** — Windows installer and Linux packages, README with install guide, legal review of the EU database right and trademarks before the public release.
-7. **More online sources** — a Lichess player's games; Chess.com game import.
-8. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
+1. **Open ChessBase databases in the app** — `.cbh` and `.cbv` in Open… and the tiles; games converted once into `<name>.sqlite` beside the original (as for PGN), with progress; ChessBase files stay read-only. Check against `MyPGNDownloads.cbh` (1,417 games matched before).
+2. **Game window extras** — flip the board, evaluation bar, click an engine line to play it, keyboard shortcuts.
+3. **Ribbon** — the toolbar grouped into tabs (File, Home, Analysis, Lichess).
+4. **Linux build and CI** — GitHub Actions: tests on Windows and Linux on every push; Linux e2e approach to be decided (WebView2 debugging is Windows-only).
+5. **First release (v0.1.0)** — Windows installer and Linux packages, README with install guide, legal review of the EU database right and trademarks before the public release.
+6. **More online sources** — a Lichess player's games; Chess.com game import.
+7. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
 
 ## Known issues
 
 - Some games in the ChessBase comparison (6 of 1,417) differ for reasons not yet explained.
 - The Lichess token is stored as a plain file in the app's config folder.
 - Linux has never been built or tested.
+- Rust line and function coverage are understated: the coverage tool counts a second, never-run copy
+  of the core library (from its separate builds for unit and integration tests). Branch coverage,
+  the measure the rules require, is above 80% even so.
+- chessops drops `}` from comments when writing PGN, which PGN can't hold anyway.

@@ -98,8 +98,8 @@ Right-click a move in the notation for:
 
 ## Saving games
 
-Changes show **Unsaved changes** next to the buttons. ChessVault asks before you leave a game with
-unsaved changes.
+Changes show **Unsaved changes** next to the buttons. ChessVault asks before anything throws them
+away: opening another game or database, a new game, **Undo last save**, or closing the window.
 
 - **Save** stores the game in its database. **Undo last save** brings back the version from before
   the last save; you can undo several saves in a row.
@@ -110,7 +110,9 @@ unsaved changes.
 
 - **This database** – the database that is open.
 - **An existing PGN file or database…** – the game is added at the end of that file.
-- **A new PGN file or database…** – a new file; a new PGN file holds only this game.
+- **A new PGN file or database…** – a new file; a new PGN file holds only this game. If you pick a
+  PGN file that already exists, Windows asks whether to replace it, and it then holds only this game.
+  An existing database is never replaced: add the game to it with the option above instead.
 
 The game list updates at once, and the board stays on the move you were looking at.
 
@@ -189,8 +191,9 @@ games ended: White wins, draws and Black wins as a bar, with the average rating.
 
 - Opening a **PGN file** the first time creates a ChessVault database next to it with the same
   name, ending in `.sqlite` (for example `Club games.pgn` gets `Club games.sqlite`). Your edits and
-  new games go into that database; **the PGN file itself is never changed**. Opening the PGN file
-  again uses the same database.
+  new games go into that database, and **editing never changes the PGN file**. Opening the PGN file
+  again uses the same database, even if you deleted all its games. The PGN file only changes when
+  you choose it under **Save as new game → An existing PGN file…**, which adds the game at its end.
 - **ChessVault databases** (`.sqlite`) are single files you can copy or back up like any other.
 - ChessVault never writes to ChessBase files.
 
@@ -199,7 +202,8 @@ games ended: White wins, draws and Black wins as a bar, with the average rating.
 - **"is not a ChessVault database"** – the file is not a database ChessVault made. Open PGN files
   through **Open…**; to use a ChessBase database, export it to PGN in ChessBase first.
 - **A recent file can't be opened** – it was moved or deleted. ChessVault offers to take it off
-  the list.
+  the list; it never creates an empty database in its place. If My Games was moved, right-click it
+  and choose **Choose another My Games database…**.
 - **"could not start the engine"** – check the engine path in the Engine panel.
 - **"Lichess rejected the token"** – the token was deleted or mistyped; create a new one.
 - **"Lichess is limiting requests"** – wait a minute; stepping through many moves very fast can

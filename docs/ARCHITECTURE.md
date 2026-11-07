@@ -47,7 +47,10 @@ Parses arguments with clap and calls `core`. No logic of its own beyond printing
 ### `app/src-tauri` — desktop backend adapter
 
 Tauri commands that call `core` and hold the open database and the running engine. Commands
-translate errors into messages; they contain no chess or database logic.
+translate errors into messages; they contain no chess or database logic. Commands that touch files
+or the database are `async`, so Tauri runs them off the window's thread. `CHESSVAULT_CONFIG_DIR`
+replaces the config folder (where the Lichess token is kept); the e2e tests set it so they never
+use the user's own token.
 
 ### `app/src` — desktop user interface (React)
 
@@ -55,8 +58,8 @@ translate errors into messages; they contain no chess or database logic.
 |---|---|---|
 | Logic | `tree.ts` (game tree on chessops), `filter.ts` (searches), `columns.ts` (game list columns and sorting), `pgn.ts` (new games, header values), `engine.ts` (engine lines and scores), `recent.ts` (recent files, My Games, paths), `types.ts` (data shared with the backend) | No React, no Tauri, no screens, no hooks, no `api.ts`. Unit-tested with Vitest. |
 | Backend access | `api.ts` | The only file that uses Tauri: commands, engine events, file windows, show in folder. May use logic types only. |
-| State (hooks) | `useDialogs.ts` (questions and menus), `useGameList.ts` (list, sorting, search, loading more), `useGameEditor.ts` (the game on the board and its editing), `useFileCounts.ts` (game counts for the tiles) | Hold state and call logic and `api.ts`; render nothing (they may use `Dialog.tsx`'s types). |
-| Screens (components) | `App.tsx` (ties the parts together and runs the file operations), `Toolbar`, `SearchBar`, `GameList`, `GameView`, `DatabaseTiles`, `Board`, `Notation`, `EnginePanel`, `ExplorerPanel`, `Search` (search window), `Dialog` (questions and menus) | Show state and pass the user's actions on. |
+| State (hooks) | `useDialogs.ts` (questions and menus), `useGameList.ts` (list, sorting, search, loading more), `useGameEditor.ts` (the game on the board and its editing), `useFileCounts.ts` (game counts for the tiles), `useEngine.ts` (engine analysis), `useExplorer.ts` (Lichess explorer and token) | Hold state and call logic and `api.ts`; render nothing (they may use `Dialog.tsx`'s types). |
+| Screens (components) | `App.tsx` (ties the parts together and runs the file operations), `Toolbar`, `SearchBar`, `GameList`, `GameView`, `DatabaseTiles`, `Board`, `Notation`, `EnginePanel`, `ExplorerPanel`, `Search` (search window), `Dialog` (questions and menus) | Show state and pass the user's actions on; only `App.tsx` calls `api.ts`, the others reach the backend through hooks. |
 
 dependency-cruiser checks these rules, plus no circular imports and no unused modules
 (`pnpm test:arch`, configured in `app/.dependency-cruiser.cjs`).
@@ -65,8 +68,13 @@ dependency-cruiser checks these rules, plus no circular imports and no unused mo
 
 - Games are stored as PGN text in SQLite, with indexed header columns (players, Elo, ECO, date,
   moves) for lists and searches. Every edit keeps the previous version for undo.
-- Opening a `.pgn` file creates a `.sqlite` database beside it the first time; the PGN file itself
-  is never changed. ChessBase files are only ever read.
+- Opening a `.pgn` file creates a `.sqlite` database beside it the first time and records in its
+  `meta` table that the PGN was imported, so it is never imported twice. Editing never changes the
+  PGN file; only "Save as new game" into an existing PGN file appends to it.
+- Opening never creates a missing database (`db::open_path` fails with `NotFound`); creating one is
+  the separate `db::create_database`. Export writes only `.pgn` files and adding a game only `.pgn`
+  or `.sqlite`, so ChessBase files and databases can't be overwritten by mistake. ChessBase files
+  are only ever read.
 - Settings that belong to one computer (recent files, My Games location, engine path) live in the
   app's local storage; the Lichess token in a file in the app's config folder.
 
