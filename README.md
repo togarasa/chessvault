@@ -2,12 +2,17 @@
 
 An open-source chess database and analysis tool for Windows and Linux, written in Rust.
 
-- Open ChessBase `.cbh` and `.cbv` databases and PGN files (via [cbvault](https://github.com/itshak/cbvault))
+- Open PGN files and keep games in ChessVault databases
+- Convert ChessBase `.cbh` databases to PGN with the command-line tool (via [cbvault](https://github.com/itshak/cbvault)); opening them in the app is next on the roadmap
 - Save and organize your own games
 - Analyze positions and games with Stockfish or any UCI engine
 - Browse the Lichess opening explorer and games
 
 **Status:** early development. The desktop app opens PGN files and ChessVault databases, edits games with variations and comments, and has Stockfish and Lichess explorer panels.
+
+## User guide
+
+[docs/user/README.md](docs/user/README.md) explains every feature with screenshots and short videos.
 
 ## Tests
 

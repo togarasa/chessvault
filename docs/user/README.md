@@ -1,0 +1,206 @@
+# ChessVault user guide
+
+ChessVault keeps your chess games in databases, lets you replay and annotate them, and helps you
+analyse them with a chess engine and the Lichess opening explorer. This guide shows each part with
+screenshots and short videos. The videos show every click with a label and a chapter title for
+each step; click a video link to play it.
+
+The games in the pictures are made-up examples.
+
+- [Start screen and databases](#start-screen-and-databases)
+- [The game list](#the-game-list)
+- [Replaying a game](#replaying-a-game)
+- [Entering moves and variations](#entering-moves-and-variations)
+- [Comments and symbols](#comments-and-symbols)
+- [Saving games](#saving-games)
+- [Searching for games](#searching-for-games)
+- [Importing and exporting PGN](#importing-and-exporting-pgn)
+- [Engine analysis](#engine-analysis)
+- [Lichess opening explorer](#lichess-opening-explorer)
+- [Keys](#keys)
+- [Where your games are kept](#where-your-games-are-kept)
+- [Problems](#problems)
+
+## Start screen and databases
+
+![The start screen with database tiles](images/start-screen.png)
+
+When ChessVault starts it shows your databases as tiles: the name, how many games it holds, its
+folder and when you last opened it.
+
+- **Double-click a tile** to open it (or click it once and press Enter).
+- **My Games** is always first: a database for your own games. The first time you double-click
+  it, ChessVault asks where to keep it.
+- **Add database…** opens a PGN file (`.pgn`) or a ChessVault database (`.sqlite`) from any folder.
+  **Open…** in the toolbar does the same, and **Recent ▾** lists the last files you opened.
+- **Right-click a tile** to open it, show it in its folder, or remove it from the list. Removing
+  only takes it off the list; the file stays on your disk.
+- A tile that says **not found** points to a file that was moved or deleted.
+- **Databases** in the toolbar brings you back to this screen from an open database.
+
+▶ [Video: open a database and browse a game](videos/open-and-browse.webm)
+
+## The game list
+
+![The game list](images/game-list.png)
+
+An open database lists its games with the number, both players and their Elo, the result, the
+number of moves, the ECO opening code, event, site, round and date.
+
+- **Click a column header** to sort by it, and click it again to reverse the order. Games without
+  a value, such as an unrated player, are always listed last.
+- **Scroll down** to load more games; large databases load 200 games at a time.
+- **Right-click a game** to open or delete it.
+
+## Replaying a game
+
+![A game on the board with its notation](images/game-view.png)
+
+Click a game to show it. Above the board are the players, event, date and result; you can change
+them right there. Next to the board is the notation: the main line in bold, variations in their
+own lines or in brackets, and comments in green.
+
+- **Click any move** in the notation to see the position after it.
+- Use the **arrow keys** or the buttons below the board: `|<` start, `<` back, `>` forward,
+  `>|` end of the line.
+
+## Entering moves and variations
+
+![A new move asks how to add it](images/variation-prompt.png)
+
+Play moves on the board by dragging or clicking a piece; only legal moves are possible. When a
+pawn reaches the last rank, ChessVault asks which piece it becomes.
+
+If you play a move where the game already continues differently, ChessVault asks what to do:
+
+- **New variation** keeps the game as it is and adds your move as a side line.
+- **Overwrite** replaces the game's continuation from here with your move.
+- **New main line** makes your move the main line and keeps the old moves as a variation.
+- **Cancel** puts the piece back.
+
+Playing the move that is already there simply steps forward.
+
+▶ [Video: enter a variation, comment it and save](videos/enter-variation.webm)
+
+## Comments and symbols
+
+![The right-click menu of a move](images/move-menu.png)
+
+Right-click a move in the notation for:
+
+- **Add comment… / Edit comment…** – text shown after the move.
+- **Move symbols** `!` `?` `!!` `??` `!?` `?!` and **position symbols** `=` `∞` `⩲` `⩱` `±` `∓` `+−` `−+`.
+  Click a symbol again to remove it.
+- **Remove comment and symbols**.
+- **Promote variation** – moves a variation one place up, up to the main line.
+- **Delete variation** – removes the whole side line the move is in.
+- **Delete moves from here** – removes this move and everything after it.
+
+## Saving games
+
+Changes show **Unsaved changes** next to the buttons. ChessVault asks before you leave a game with
+unsaved changes.
+
+- **Save** stores the game in its database. **Undo last save** brings back the version from before
+  the last save; you can undo several saves in a row.
+- **New game** starts an empty board. **Save as new game** asks for the players, event, date and
+  result, and where to save it:
+
+![Saving a new game](images/save-new-game.png)
+
+- **This database** – the database that is open.
+- **An existing PGN file or database…** – the game is added at the end of that file.
+- **A new PGN file or database…** – a new file; a new PGN file holds only this game.
+
+The game list updates at once, and the board stays on the move you were looking at.
+
+- **Delete game** removes the game shown on the board, after asking. A deleted game can't be undone,
+  so export your games first if you want a copy.
+
+▶ [Video: enter and save a new game](videos/new-game.webm)
+
+## Searching for games
+
+Type a player's name in **Search by player name** and press Enter to find their games with either
+colour. **Search games…** searches by more:
+
+![The search window](images/search-window.png)
+
+- **Players** – White and Black; tick **Ignore colour** to also find the games where the two played
+  the other colours.
+- **Result**, **ECO from / to** (for example `B20` to `B99`, or `C` to `D9` for all C and D codes),
+  **Date from / to** (a year like `2024`, a month `2024.06` or a day `2024.06.15`).
+- **White Elo at least**, **Black Elo at least**, **Event** and **Site**.
+
+Names and text match any part and ignore upper and lower case. Every filled-in field must match.
+
+![Search results with the active search](images/search-results.png)
+
+The line above the list shows what you searched for; **Show all games** brings back the full list.
+The search window remembers your last search; **Clear fields** empties it.
+
+▶ [Video: search for games](videos/search.webm)
+
+## Importing and exporting PGN
+
+- **Import PGN…** adds the games of a PGN file to the open database.
+- **Export PGN…** writes all games, or only the game on the board, to a PGN file. ChessBase and most
+  other chess programs open PGN files, so this is how you take your games elsewhere. An export
+  contains the last saved version of each game.
+
+## Engine analysis
+
+![The engine panel analysing a position](images/engine-panel.png)
+
+ChessVault works with Stockfish or any other UCI engine. Stockfish is free from
+[stockfishchess.org](https://stockfishchess.org/download/).
+
+1. Type the path of the engine program in the **Engine** panel, for example
+   `C:\Tools\stockfish\stockfish-windows-x86-64.exe`. ChessVault remembers it.
+2. Click **Analyze**. The engine shows its three best lines with the score from White's side
+   (`+0.32` is a third of a pawn better for White, `#3` is mate in three) and the search depth.
+3. The analysis follows the board as you move through the game. Click **Stop** to end it.
+
+## Lichess opening explorer
+
+The **Lichess explorer** panel shows how often each move was played in the position and how those
+games ended: White wins, draws and Black wins as a bar, with the average rating.
+
+- Choose **Masters** (over-the-board games of strong players) or **Lichess games** (rated online
+  games at blitz speed and slower, players rated 1800 and up).
+- **Click a move** in the table to play it on the board.
+- Lichess needs a personal token for the explorer. Create one with no permissions at
+  lichess.org/account/oauth/token and paste it into the panel. It is stored only on your computer;
+  **Token** lets you change or remove it.
+
+## Keys
+
+| Key | Does |
+|---|---|
+| → | Next move |
+| ← | Previous move |
+| Home | Start of the game |
+| End | End of the current line |
+| Enter | Open the selected database tile; answer a comment |
+| Shift+Enter | New line in a comment |
+| Escape | Close a question, menu or the search window |
+
+## Where your games are kept
+
+- Opening a **PGN file** the first time creates a ChessVault database next to it with the same
+  name, ending in `.sqlite` (for example `Club games.pgn` gets `Club games.sqlite`). Your edits and
+  new games go into that database; **the PGN file itself is never changed**. Opening the PGN file
+  again uses the same database.
+- **ChessVault databases** (`.sqlite`) are single files you can copy or back up like any other.
+- ChessVault never writes to ChessBase files.
+
+## Problems
+
+- **"is not a ChessVault database"** – the file is not a database ChessVault made. Open PGN files
+  through **Open…**; to use a ChessBase database, export it to PGN in ChessBase first.
+- **A recent file can't be opened** – it was moved or deleted. ChessVault offers to take it off
+  the list.
+- **"could not start the engine"** – check the engine path in the Engine panel.
+- **"Lichess rejected the token"** – the token was deleted or mistyped; create a new one.
+- **"Lichess is limiting requests"** – wait a minute; stepping through many moves very fast can
+  hit Lichess's limit.

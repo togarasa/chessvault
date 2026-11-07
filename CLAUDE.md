@@ -35,7 +35,9 @@ These rules apply to every change in this repository.
 
 - `docs/user/` is the user guide, written for chess players, not developers.
 - Each feature gets an explanation with screenshots, and a short video where a workflow has several steps (recorded from the e2e tests or playwright-cli).
-- Update it in the same iteration as the feature.
+- Update it in the same iteration as the feature. `pnpm docs:capture` in `app/` records the
+  screenshots and videos from the real app (`app/e2e/user-guide.guide.ts`); look at the new
+  screenshots before committing them, and keep personal paths and data out of them.
 
 ## Git
 

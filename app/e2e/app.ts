@@ -1,6 +1,6 @@
 import { Browser, Page, test as base, chromium, expect } from "@playwright/test";
 import { ChildProcess, spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -17,13 +17,15 @@ export type ChessVault = {
   pgn: string;
   /// A folder of its own for this test, deleted afterwards.
   dir: string;
+  /// The debugging address other tools (playwright-cli) can attach to.
+  cdpUrl: string;
   /// Opens a file the way a user does: by double-clicking its tile on the start screen.
   openFile: (path: string) => Promise<void>;
 };
 
 /// Starts the app with its own WebView2 profile, so tests never touch the user's
 /// recent files or settings, and connects Playwright to its window.
-async function launch(dir: string): Promise<{ app: ChildProcess; browser: Browser; page: Page }> {
+async function launch(dir: string): Promise<{ app: ChildProcess; browser: Browser; page: Page; cdpUrl: string }> {
   const port = nextPort++;
   const app = spawn(APP_EXE, [], {
     env: {
@@ -32,10 +34,11 @@ async function launch(dir: string): Promise<{ app: ChildProcess; browser: Browse
       WEBVIEW2_USER_DATA_FOLDER: join(dir, "profile"),
     },
   });
+  const cdpUrl = `http://127.0.0.1:${port}`;
   let browser: Browser | undefined;
   for (let i = 0; i < 60 && !browser; i++) {
     try {
-      browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+      browser = await chromium.connectOverCDP(cdpUrl);
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -46,15 +49,19 @@ async function launch(dir: string): Promise<{ app: ChildProcess; browser: Browse
   }
   const page = browser.contexts()[0].pages()[0] ?? (await browser.contexts()[0].waitForEvent("page"));
   await page.locator(".app").waitFor();
-  return { app, browser, page };
+  return { app, browser, page, cdpUrl };
 }
 
 export const test = base.extend<{ chessvault: ChessVault }>({
   chessvault: async ({}, use) => {
-    const dir = mkdtempSync(join(tmpdir(), "chessvault-e2e-"));
+    // CHESSVAULT_E2E_DIR puts the test folders elsewhere, e.g. somewhere without the user's
+    // name in its path for the user guide's screenshots.
+    const base = process.env.CHESSVAULT_E2E_DIR ?? tmpdir();
+    mkdirSync(base, { recursive: true });
+    const dir = mkdtempSync(join(base, "chessvault-e2e-"));
     const pgn = join(dir, "sample.pgn");
     copyFileSync(SAMPLE_PGN, pgn);
-    const { app, browser, page } = await launch(dir);
+    const { app, browser, page, cdpUrl } = await launch(dir);
 
     async function openFile(path: string) {
       // The native Open window can't be driven, so put the file in the recent list and open its tile.
@@ -66,7 +73,7 @@ export const test = base.extend<{ chessvault: ChessVault }>({
       await expect(page.locator(".status")).toContainText(/Imported|Opened/);
     }
 
-    await use({ page, pgn, dir, openFile });
+    await use({ page, pgn, dir, cdpUrl, openFile });
 
     await browser.close().catch(() => {});
     app.kill();
