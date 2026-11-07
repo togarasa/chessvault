@@ -45,7 +45,12 @@ analyse with Stockfish, use the Lichess explorer, and later import from Chess.co
 8. **iPhone version (maybe)** — after Android. Needs an Apple developer account (about €99 a year)
    and a Mac to build. iOS doesn't allow starting other programs, so the engine must be built into
    the app as a library.
-9. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
+9. **macOS version (maybe)** — added 2026-11-07 at the user's request. Tauri builds macOS apps from
+   the same code, and GitHub Actions has free macOS machines for public repositories, so no Mac is
+   needed to build it. Without Apple's signing and notarisation (the same developer account as the
+   iPhone version) macOS warns that the app is from an unknown developer. The app runs in WebKit
+   there, so the Windows-only e2e approach needs a replacement, as for Linux.
+10. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
 
 ## Known issues
 
