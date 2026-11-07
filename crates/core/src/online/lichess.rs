@@ -73,9 +73,17 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// A Lichess client. Create one and reuse it, so connections are shared.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
+    /// The explorer's address; tests point it at a local server.
+    explorer: String,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Client { http: reqwest::Client::default(), explorer: EXPLORER.to_string() }
+    }
 }
 
 impl Client {
@@ -95,7 +103,7 @@ impl Client {
         };
         let mut request = self
             .http
-            .get(format!("{EXPLORER}/{path}"))
+            .get(format!("{}/{path}", self.explorer))
             .bearer_auth(token)
             .query(&[("fen", fen), ("moves", "12"), ("topGames", "0")]);
         if database == Database::Lichess {
@@ -152,6 +160,92 @@ mod tests {
     async fn an_empty_token_fails_without_a_request() {
         let result = Client::new().explore(Database::Masters, "", "  ").await;
         assert!(matches!(result, Err(Error::MissingToken)), "{result:?}");
+    }
+
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+
+    /// A one-request HTTP server on this computer that answers with `status` and `body`.
+    /// Returns the client pointed at it and the request it received (request line and headers).
+    fn local_explorer(status: &str, body: &'static str) -> (Client, mpsc::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let status = status.to_string();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request: Vec<String> = BufReader::new(stream.try_clone().unwrap())
+                .lines()
+                .map_while(Result::ok)
+                .take_while(|line| !line.is_empty())
+                .collect();
+            let reply = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).unwrap();
+            tx.send(request).unwrap();
+        });
+        let client = Client { explorer: format!("http://{address}"), ..Client::default() };
+        (client, rx)
+    }
+
+    const START: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    #[tokio::test]
+    async fn asks_the_masters_database_with_the_token() {
+        let body = r#"{"white": 3, "draws": 2, "black": 1, "moves": [{"uci": "e2e4", "san": "e4", "white": 3, "draws": 2, "black": 1}]}"#;
+        let (client, request) = local_explorer("200 OK", body);
+        let explorer = client.explore(Database::Masters, START, " my-token ").await.unwrap();
+        assert_eq!(explorer.moves[0].san, "e4");
+
+        let request = request.recv().unwrap();
+        assert!(request[0].starts_with("GET /masters?fen=rnbqkbnr%2Fpppppppp"), "{}", request[0]);
+        assert!(request[0].contains("moves=12") && request[0].contains("topGames=0"));
+        assert!(!request[0].contains("speeds="), "masters has no speed filter");
+        assert!(request.iter().any(|h| h.eq_ignore_ascii_case("authorization: Bearer my-token")), "{request:?}");
+    }
+
+    #[tokio::test]
+    async fn asks_lichess_games_for_rated_blitz_and_slower() {
+        let (client, request) = local_explorer("200 OK", r#"{"white": 0, "draws": 0, "black": 0, "moves": []}"#);
+        client.explore(Database::Lichess, START, "token").await.unwrap();
+        let line = &request.recv().unwrap()[0];
+        assert!(line.starts_with("GET /lichess?"), "{line}");
+        assert!(line.contains("speeds=blitz%2Crapid%2Cclassical") && line.contains("ratings=1800%2C2000%2C2200%2C2500"), "{line}");
+        assert!(line.contains("recentGames=0"));
+    }
+
+    #[tokio::test]
+    async fn turns_error_replies_into_clear_errors() {
+        for (status, expected) in [
+            ("401 Unauthorized", "Lichess rejected the token; check or replace it"),
+            ("429 Too Many Requests", "Lichess is limiting requests; wait a minute and try again"),
+            ("503 Service Unavailable", "Lichess returned HTTP 503"),
+        ] {
+            let (client, _request) = local_explorer(status, "{}");
+            let error = client.explore(Database::Masters, START, "token").await.unwrap_err();
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_is_not_explorer_data_is_an_error() {
+        let (client, _request) = local_explorer("200 OK", "not json");
+        let error = client.explore(Database::Masters, START, "token").await.unwrap_err();
+        assert!(matches!(error, Error::Http(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_server_is_an_error() {
+        // Bind and drop a listener to get a port nothing listens on.
+        let address = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let client = Client { explorer: format!("http://{address}"), ..Client::default() };
+        let error = client.explore(Database::Masters, START, "token").await.unwrap_err();
+        assert!(error.to_string().starts_with("could not reach Lichess"), "{error}");
+        assert_eq!(Error::MissingToken.to_string(), "the Lichess explorer needs a token; add one in the explorer panel");
     }
 
     #[test]

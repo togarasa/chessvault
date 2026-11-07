@@ -46,6 +46,7 @@ pub struct EngineLine {
 }
 
 /// What the output thread needs to know about the search.
+#[derive(Debug, Default)]
 struct Search {
     /// The position being analyzed.
     fen: Option<String>,
@@ -54,6 +55,48 @@ struct Search {
     /// `bestmove` replies still due from searches that were stopped. Output
     /// before they arrive belongs to an old position and is ignored.
     stale: u32,
+}
+
+impl Search {
+    /// Records a new search of `fen`. Returns whether a search was running and must be stopped first.
+    fn begin(&mut self, fen: &str) -> bool {
+        let was_running = self.running;
+        if was_running {
+            self.stale += 1;
+        }
+        self.fen = Some(fen.to_string());
+        self.running = true;
+        was_running
+    }
+
+    /// Records that the current search is being stopped. Returns whether one was running.
+    fn end(&mut self) -> bool {
+        let was_running = self.running;
+        if was_running {
+            self.stale += 1;
+            self.running = false;
+        }
+        was_running
+    }
+
+    /// Handles one line of engine output. Returns an analysis line when it belongs to the
+    /// position being analyzed.
+    fn on_output(&mut self, line: &str) -> Option<EngineLine> {
+        if line.starts_with("bestmove") {
+            if self.stale > 0 {
+                self.stale -= 1;
+            } else {
+                // The current search ended on its own, e.g. at checkmate.
+                self.running = false;
+            }
+            return None;
+        }
+        let info = parse_info(line)?;
+        if self.stale > 0 {
+            return None;
+        }
+        info.into_line(self.fen.as_deref()?)
+    }
 }
 
 fn lock(search: &Mutex<Search>) -> MutexGuard<'_, Search> {
@@ -78,32 +121,16 @@ impl Engine {
             .spawn()?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
-        let search = Arc::new(Mutex::new(Search { fen: None, running: false, stale: 0 }));
+        let search = Arc::new(Mutex::new(Search::default()));
 
         let shared = Arc::clone(&search);
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                if line.starts_with("bestmove") {
-                    let mut s = lock(&shared);
-                    if s.stale > 0 {
-                        s.stale -= 1;
-                    } else {
-                        // The current search ended on its own, e.g. at checkmate.
-                        s.running = false;
-                    }
-                    continue;
-                }
-                let Some(info) = parse_info(&line) else { continue };
-                let fen = {
-                    let s = lock(&shared);
-                    if s.stale > 0 {
-                        continue;
-                    }
-                    s.fen.clone()
-                };
-                if let Some(engine_line) = fen.and_then(|fen| info.into_line(&fen)) {
-                    on_line(engine_line);
+                // The lock is released before `on_line` runs.
+                let analysis = lock(&shared).on_output(&line);
+                if let Some(analysis) = analysis {
+                    on_line(analysis);
                 }
             }
         });
@@ -117,16 +144,7 @@ impl Engine {
 
     /// Analyzes `fen` until stopped, replacing any search in progress.
     pub fn analyze(&mut self, fen: &str) -> io::Result<()> {
-        let was_running = {
-            let mut s = lock(&self.search);
-            let was_running = s.running;
-            if was_running {
-                s.stale += 1;
-            }
-            s.fen = Some(fen.to_string());
-            s.running = true;
-            was_running
-        };
+        let was_running = lock(&self.search).begin(fen);
         if was_running {
             self.send("stop")?;
         }
@@ -136,15 +154,7 @@ impl Engine {
 
     /// Stops the current search, if any.
     pub fn stop(&mut self) -> io::Result<()> {
-        let was_running = {
-            let mut s = lock(&self.search);
-            let was_running = s.running;
-            if was_running {
-                s.stale += 1;
-                s.running = false;
-            }
-            was_running
-        };
+        let was_running = lock(&self.search).end();
         if was_running {
             self.send("stop")?;
         }
@@ -271,6 +281,67 @@ mod tests {
     fn rejects_moves_that_are_illegal_in_the_position() {
         let info = parse_info("info depth 10 score cp 10 pv e2e4").unwrap();
         assert_eq!(info.into_line(AFTER_E4), None);
+    }
+
+    #[test]
+    fn ignores_malformed_info_lines() {
+        assert_eq!(parse_info("info depth 3 score wdl 1 2 pv e2e4"), None);
+        assert_eq!(parse_info("info depth 3 score cp x pv e2e4"), None);
+        assert_eq!(parse_info("info score cp 3 pv e2e4"), None, "no depth");
+        assert_eq!(parse_info("info depth 3 pv e2e4"), None, "no score");
+        assert_eq!(parse_info("info depth 3 multipv two score cp 3 pv e2e4"), None);
+        assert_eq!(parse_info("info depth"), None);
+        assert_eq!(parse_info(""), None);
+    }
+
+    #[test]
+    fn rejects_a_position_that_is_not_a_fen() {
+        let info = parse_info("info depth 1 score cp 0 pv e2e4").unwrap();
+        assert_eq!(info.into_line("not a fen"), None);
+        let info = parse_info("info depth 1 score cp 0 pv e9e4").unwrap();
+        assert_eq!(info.into_line(START), None, "not a UCI move");
+    }
+
+    #[test]
+    fn reports_lines_only_for_the_position_being_analyzed() {
+        let mut search = Search::default();
+        let info = "info depth 8 multipv 1 score cp 20 pv e2e4";
+        assert_eq!(search.on_output(info), None, "no search yet");
+
+        assert!(!search.begin(START), "nothing was running");
+        assert_eq!(search.on_output(info).unwrap().moves, ["e4"]);
+        assert_eq!(search.on_output("info string hello"), None);
+
+        // A new position while the old search runs: its output and bestmove are stale.
+        assert!(search.begin(AFTER_E4));
+        assert_eq!(search.on_output(info), None, "late line from the start position");
+        assert_eq!(search.on_output("bestmove e2e4"), None);
+        assert!(search.running, "the stale bestmove doesn't end the new search");
+        let line = search.on_output("info depth 8 score cp 15 pv c7c5").unwrap();
+        assert_eq!((line.fen.as_str(), line.score), (AFTER_E4, Score::Cp(-15)));
+
+        // A search can also end on its own, e.g. at checkmate.
+        assert_eq!(search.on_output("bestmove c7c5"), None);
+        assert!(!search.running);
+    }
+
+    #[test]
+    fn stopping_marks_the_coming_bestmove_as_stale() {
+        let mut search = Search::default();
+        assert!(!search.end(), "nothing to stop");
+        search.begin(START);
+        assert!(search.end());
+        assert!(!search.end(), "already stopped");
+        assert_eq!(search.on_output("info depth 9 score cp 20 pv e2e4"), None);
+        search.on_output("bestmove e2e4");
+        assert_eq!(search.stale, 0);
+        assert_eq!(search.on_output("info depth 9 score cp 20 pv e2e4").unwrap().moves, ["e4"]);
+    }
+
+    #[test]
+    fn a_missing_engine_is_an_error() {
+        let result = Engine::start(Path::new("no/such/engine.exe"), |_| {});
+        assert!(result.is_err());
     }
 
     /// Runs only when asked: `CHESSVAULT_ENGINE=<path> cargo test -- --ignored`.
