@@ -4,6 +4,9 @@ import { expect, playMove, test } from "./app";
 const rows = (page: import("@playwright/test").Page) => page.locator(".games tbody tr");
 const notation = (page: import("@playwright/test").Page) => page.locator(".notation");
 const dialog = (page: import("@playwright/test").Page) => page.locator(".dialog");
+/// The game's Save button; the explorer's token form has one too.
+const saveButton = (page: import("@playwright/test").Page) =>
+  page.locator(".actions").getByRole("button", { name: "Save", exact: true });
 
 /// Clicks the game whose row contains `player` and waits until it is on the board.
 async function openGame(page: import("@playwright/test").Page, player: string) {
@@ -100,7 +103,7 @@ test("a new move on the board can become a variation, and saving keeps it", asyn
   await expect(dialog(page)).toHaveCount(0);
   await expect(notation(page).locator(".move.active")).toHaveText("1. e4");
 
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await saveButton(page).click();
   await expect(page.locator(".status")).toContainText("Saved game 1");
 
   // Open another game and come back: the variation was stored.
@@ -134,7 +137,7 @@ test("the right-click menu adds a comment and a symbol, and undo restores the sa
   await page.locator(".menu-row button", { hasText: /^!$/ }).click();
   await expect(move).toHaveText("2. Nf3!");
 
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await saveButton(page).click();
   await expect(page.locator(".status")).toContainText("Saved game 1");
   await expect(page.locator(".source textarea")).toHaveValue(/2\. Nf3 \$1 \{ Develops a piece \}/);
 

@@ -21,7 +21,7 @@ const movetext = (pgn: string) => pgn.split("\n\n")[1].trim();
 
 /// Plays `uci` from `node`, adding it in `mode` when it is new, and returns the node reached.
 function play(node: MoveNode, uci: string, mode: "variation" | "overwrite" | "mainline" = "mainline") {
-  const { node: child, existing } = childFor(node, parseUci(uci)!);
+  const { node: child, existing } = childFor(node, parseUci(uci)!)!;
   if (!existing) addMove(node, child, mode);
   return child;
 }
@@ -91,7 +91,7 @@ describe("childFor and addMove", () => {
   it("follows a move that exists and makes a node for a new one", () => {
     const tree = parseGame("1. e4 e5 *");
     expect(childFor(tree.root, parseUci("e2e4")!)).toEqual({ node: tree.root.children[0], existing: true });
-    const { node, existing } = childFor(tree.root, parseUci("d2d4")!);
+    const { node, existing } = childFor(tree.root, parseUci("d2d4")!)!;
     expect(existing).toBe(false);
     expect([node.san, node.ply, node.parent]).toEqual(["d4", 1, tree.root]);
     expect(tree.root.children).toHaveLength(1);
@@ -101,13 +101,13 @@ describe("childFor and addMove", () => {
     const tree = parseGame("1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 *");
     let end = tree.root;
     while (end.children[0]) end = end.children[0];
-    expect(childFor(end, parseUci("e1g1")!).node.san).toBe("O-O");
-    expect(childFor(end, parseUci("e1h1")!).node.san).toBe("O-O");
+    expect(childFor(end, parseUci("e1g1")!)!.node.san).toBe("O-O");
+    expect(childFor(end, parseUci("e1h1")!)!.node.san).toBe("O-O");
   });
 
   it("adds a promotion with the chosen piece", () => {
     const tree = parseGame('[FEN "8/P7/8/8/8/8/8/k6K w - - 0 1"]\n[SetUp "1"]\n\n*');
-    expect(childFor(tree.root, parseUci("a7a8n")!).node.san).toBe("a8=N");
+    expect(childFor(tree.root, parseUci("a7a8n")!)!.node.san).toBe("a8=N");
   });
 
   it("adds a new move as a variation, a new main line, or over the old continuation", () => {
@@ -125,6 +125,33 @@ describe("childFor and addMove", () => {
     const e4 = play(tree.root, "e2e4");
     expect(position(e4).turn).toBe("black");
     expect(e4.fen.startsWith("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b")).toBe(true);
+  });
+});
+
+describe("review findings of 2026-11-07", () => {
+  it("refuses moves that are not legal in the position", () => {
+    const tree = parseGame("1. e4 *");
+    const e4 = tree.root.children[0];
+    expect(childFor(e4, parseUci("d2d4")!), "White can't move twice").toBeNull();
+    expect(childFor(tree.root, parseUci("e3e4")!), "no piece on e3").toBeNull();
+    expect(childFor(e4, parseUci("e7e5")!)!.node.san).toBe("e5");
+  });
+
+  it("keeps comments before a move where they were", () => {
+    const pgn = "1. e4 ( { Better is } 1. d4 d5 ) 1... e5 *";
+    const tree = parseGame(pgn);
+    const d4 = tree.root.children[1];
+    expect([d4.startingComments, d4.comments]).toEqual([["Better is"], []]);
+    expect(movetext(writeGame(tree))).toBe("1. e4 ( { Better is } 1. d4 d5 ) 1... e5 *");
+  });
+
+  it("keeps symbols like a novelty when a move or position symbol is set", () => {
+    const node = parseGame("1. e4 $146 $36 *").root.children[0];
+    toggleNag(node, 16);
+    toggleNag(node, 1);
+    expect(node.nags).toEqual([1, 16, 36, 146]);
+    toggleNag(node, 18);
+    expect(node.nags).toEqual([1, 18, 36, 146]);
   });
 });
 

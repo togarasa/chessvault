@@ -102,7 +102,10 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
   /// Plays `move` from the shown position, asking how to add it when the position already has a continuation.
   async function play(move: Move) {
     if (!current) return;
-    const { node, existing } = childFor(current, move);
+    const reached = childFor(current, move);
+    // Not legal here, e.g. from an explorer table that still showed another position.
+    if (!reached) return putBack();
+    const { node, existing } = reached;
     if (existing) {
       setCurrent(node);
       return;
@@ -174,8 +177,9 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
       symbolRow(POSITION_NAGS),
       {
         label: "Remove comment and symbols",
-        disabled: !node.comments.length && !node.nags.length,
+        disabled: !node.comments.length && !node.startingComments.length && !node.nags.length,
         action: edit(() => {
+          node.startingComments = [];
           node.comments = [];
           node.nags = [];
         }),

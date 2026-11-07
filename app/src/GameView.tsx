@@ -83,7 +83,10 @@ export function GameView({ editor, onSave, onUndo, onDelete, onMoveMenu }: Props
       <details className="source">
         <summary>PGN source</summary>
         <textarea value={editor.draft} onChange={(e) => editor.setDraft(e.currentTarget.value)} spellCheck={false} />
-        <p className="muted">Edits here are saved as typed; moves made on the board replace them.</p>
+        <p className="muted">
+          Typed edits are saved as they are, unless you then change the game another way (a move, a comment, a
+          symbol or a field above), which writes this text again from the board.
+        </p>
       </details>
     </>
   );

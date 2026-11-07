@@ -118,6 +118,17 @@ describe("useGameEditor", () => {
     expect(result.current.dirty).toBe(false);
   });
 
+  it("puts the piece back for a move that is not legal in the shown position", async () => {
+    const { result, askUser } = editor();
+    act(() => result.current.show(1, PGN, [0]));
+    const before = result.current.revision;
+    await act(() => result.current.play(parseUci("d2d4")!));
+    expect(result.current.revision).toBe(before + 1);
+    expect(result.current.current?.san).toBe("e4");
+    expect(askUser).not.toHaveBeenCalled();
+    expect(result.current.dirty).toBe(false);
+  });
+
   it("asks which piece a pawn becomes, and can be cancelled", async () => {
     const { result, askUser } = editor(["knight", null]);
     act(() => result.current.show(null, '[FEN "8/P7/8/8/8/8/8/k6K w - - 0 1"]\n[SetUp "1"]\n\n*'));

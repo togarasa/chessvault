@@ -43,6 +43,14 @@ export function Notation({ root, current, onSelect, onMenu }: Props) {
     const out: ReactNode[] = [];
     let withNumber = true;
     for (let node: MoveNode | undefined = start; node; node = node.children[0]) {
+      for (const [i, comment] of node.startingComments.entries()) {
+        out.push(
+          <span key={`${node.id}s${i}`} className="comment">
+            {comment}
+          </span>,
+        );
+        withNumber = true;
+      }
       out.push(move(node, withNumber));
       withNumber = false;
       for (const [i, comment] of node.comments.entries()) {

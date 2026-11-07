@@ -57,19 +57,27 @@ test("the Databases button goes back to the tiles, with fresh counts", async ({ 
   await expect(tile(page, "sample.pgn")).toContainText("4 games");
 });
 
-test("My Games is created on first use and pinned first", async ({ chessvault: { page, pgn, dir } }) => {
-  const mine = join(dir, "My Games.sqlite");
-  // The real first use asks where to keep it in Windows' save window; the test sets the answer.
-  await seed(page, [pgn], mine);
+test("a moved My Games is reported, not created again empty", async ({ chessvault: { page, pgn, dir } }) => {
+  // Creating My Games the first time goes through Windows' save window, which a test can't use.
+  const moved = join(dir, "My Games.sqlite");
+  await seed(page, [pgn], moved);
   await expect(page.locator(".tile").first()).toContainText("My Games");
   await expect(tile(page, "My Games")).toContainText("not found");
-
   await tile(page, "My Games").dblclick();
-  await expect(page.locator(".status")).toContainText("(0 games)");
-  expect(existsSync(mine)).toBe(true);
+  await expect(page.locator(".status")).toContainText("was not found");
+  expect(existsSync(moved)).toBe(false);
+});
+
+test("My Games is pinned first and opens directly", async ({ chessvault: { page, pgn, dir, openFile } }) => {
+  // Opening the sample PGN makes a database beside it; use that as My Games.
+  await openFile(pgn);
+  const mine = join(dir, "sample.sqlite");
+  await seed(page, [pgn], mine);
+  await tile(page, "My Games").dblclick();
+  await expect(page.locator(".status")).toContainText("(3 games)");
 
   await page.getByRole("button", { name: "Databases" }).click();
-  await expect(tile(page, "My Games")).toContainText("0 games");
+  await expect(tile(page, "My Games")).toContainText("3 games");
   // Opening My Games doesn't add it to the other tiles a second time.
   await expect(page.locator(".tile")).toHaveCount(3);
 

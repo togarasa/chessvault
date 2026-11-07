@@ -40,3 +40,23 @@ export type Order = { column: SortColumn; descending: boolean };
 
 /// What opening a file did: the database used, its games, and how many were just imported.
 export type OpenResult = { database: string; games: number; imported: number };
+
+/// Which games the Lichess explorer counts (`lichess::Database`).
+export type ExplorerDatabase = "masters" | "lichess";
+
+export type ExplorerMove = {
+  uci: string;
+  san: string;
+  white: number;
+  draws: number;
+  black: number;
+  averageRating: number | null;
+};
+
+export type Explorer = {
+  white: number;
+  draws: number;
+  black: number;
+  moves: ExplorerMove[];
+  opening: { eco: string; name: string } | null;
+};

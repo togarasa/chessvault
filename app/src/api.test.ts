@@ -23,6 +23,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: windows.open, save: windows.save }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: reveal }));
+const windowEvents = vi.hoisted(() => ({ close: null as null | ((event: { preventDefault: () => void }) => void), destroy: vi.fn(), stop: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    onCloseRequested: async (handler: (event: { preventDefault: () => void }) => void) => {
+      windowEvents.close = handler;
+      return windowEvents.stop;
+    },
+    destroy: windowEvents.destroy,
+  }),
+}));
 
 const api = await import("./api");
 const { EMPTY_FILTER } = await import("./filter");
@@ -31,7 +41,8 @@ const { EMPTY_FILTER } = await import("./filter");
 /// Rust names into camelCase, and `state` and `app` are filled in by Tauri itself.
 function backendCommands(): Map<string, string[]> {
   const commands = new Map<string, string[]>();
-  for (const [, name, params] of backendSource.matchAll(/#\[tauri::command\]\s*(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)/g)) {
+  // Commands are marked #[tauri::command] or #[tauri::command(async)].
+  for (const [, name, params] of backendSource.matchAll(/#\[tauri::command(?:\([^)]*\))?\]\s*(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)/g)) {
     // Type arguments like State<'_, AppState> contain commas of their own.
     const args = params
       .replace(/<[^<>]*>/g, "")
@@ -53,13 +64,14 @@ describe("api.ts calls the backend's real commands", () => {
   const order = { column: "id", descending: false } as const;
   const everyCall: [string, () => Promise<unknown>][] = [
     ["open_database", () => api.openDatabase("a.pgn")],
+    ["create_database", () => api.createDatabase("a.sqlite")],
     ["import_pgn", () => api.importPgn("a.pgn")],
     ["list_games", () => api.listGames(order, 10, 0)],
     ["search_games", () => api.searchGames(EMPTY_FILTER, order, 10, 0)],
     ["get_game", () => api.getGame(1)],
     ["save_game", () => api.saveGame(1, "pgn")],
     ["add_game", () => api.addGame("pgn")],
-    ["add_game_to", () => api.addGameTo("b.pgn", "pgn")],
+    ["add_game_to", () => api.addGameTo("b.pgn", "pgn", false)],
     ["delete_game", () => api.deleteGame(1)],
     ["undo_game", () => api.undoGame(1)],
     ["export_pgn", () => api.exportPgn("out.pgn", null)],
@@ -101,6 +113,21 @@ describe("engine lines", () => {
     expect(seen).toEqual([{ multipv: 1 }]);
     stop();
     await vi.waitFor(() => expect(stopListening).toHaveBeenCalledOnce());
+  });
+});
+
+describe("the window", () => {
+  it("stays open when closed, so the app can ask first, and closes for real on request", async () => {
+    const onClose = vi.fn();
+    const stop = api.onCloseRequested(onClose);
+    await vi.waitFor(() => expect(windowEvents.close).not.toBeNull());
+    const preventDefault = vi.fn();
+    windowEvents.close!({ preventDefault });
+    expect([preventDefault.mock.calls.length, onClose.mock.calls.length]).toEqual([1, 1]);
+    stop();
+    await vi.waitFor(() => expect(windowEvents.stop).toHaveBeenCalledOnce());
+    await api.closeWindow();
+    expect(windowEvents.destroy).toHaveBeenCalledOnce();
   });
 });
 

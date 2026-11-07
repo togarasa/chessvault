@@ -78,7 +78,12 @@ export function DatabaseTiles({ files, myGames, counts, onOpen, onMyGames, onAdd
             () => onOpen(f.path),
           ),
         )}
-        <button className="tile add" onDoubleClick={onAdd} onClick={onAdd} title="Open a PGN file or database">
+        <button
+          className="tile add"
+          onDoubleClick={onAdd}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), onAdd())}
+          title="Open a PGN file or database"
+        >
           <span className="tile-plus" aria-hidden>
             +
           </span>

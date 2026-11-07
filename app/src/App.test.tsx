@@ -8,6 +8,9 @@ import { GameSummary } from "./types";
 vi.mock("./api", async (original) => ({
   ...(await original<typeof import("./api")>()),
   openDatabase: vi.fn(),
+  createDatabase: vi.fn(),
+  onCloseRequested: vi.fn(),
+  closeWindow: vi.fn(),
   importPgn: vi.fn(),
   listGames: vi.fn(),
   searchGames: vi.fn(),
@@ -54,6 +57,7 @@ const summary = (id: number, white: string, black: string): GameSummary => ({
 const GAMES = [summary(1, "Alpha, Anna", "Beta, Bernd"), summary(2, "Gamma, Gerd", "Alpha, Anna")];
 const pgnOf = (white: string) => `[Event "Club"]\n[Date "2026.01.01"]\n[White "${white}"]\n[Black "Beta, Bernd"]\n[Result "1-0"]\n\n1. e4 e5 1-0`;
 
+let closeRequested: () => void = () => {};
 const status = () => document.querySelector(".status")!.textContent;
 const dialog = () => within(document.querySelector(".dialog") as HTMLElement);
 const button = (name: string) => screen.getByRole("button", { name });
@@ -64,6 +68,11 @@ beforeEach(() => {
   localStorage.clear();
   vi.mocked(api.databaseCounts).mockImplementation(async (paths) => paths.map(() => 2));
   vi.mocked(api.openDatabase).mockResolvedValue({ database: "C:\\games\\club.sqlite", games: 2, imported: 0 });
+  vi.mocked(api.createDatabase).mockResolvedValue({ database: "D:\\My Games.sqlite", games: 0, imported: 0 });
+  vi.mocked(api.onCloseRequested).mockImplementation((onClose) => {
+    closeRequested = onClose;
+    return () => {};
+  });
   vi.mocked(api.listGames).mockResolvedValue(GAMES);
   vi.mocked(api.searchGames).mockResolvedValue([GAMES[0]]);
   vi.mocked(api.getGame).mockImplementation(async (id) => {
@@ -141,6 +150,15 @@ describe("opening files", () => {
     expect(screen.queryByText("club.pgn")).toBeNull();
   });
 
+  it("keeps showing the open database when another one fails to open", async () => {
+    await openClub();
+    vi.mocked(api.openDatabase).mockRejectedValueOnce("not a ChessVault database");
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\notes.sqlite");
+    await userEvent.click(button("Open…"));
+    await waitFor(() => expect(status()).toBe("not a ChessVault database"));
+    expect(screen.getByText("club.pgn", { selector: ".current-file" })).toBeTruthy();
+  });
+
   it("only reports a failure for a file that isn't in the recent list", async () => {
     vi.mocked(api.openDatabase).mockRejectedValue("no such file");
     render(<App />);
@@ -181,12 +199,14 @@ describe("My Games and the tile menu", () => {
     vi.mocked(api.chooseFileToSave).mockResolvedValueOnce("D:\\My Games.sqlite");
     await userEvent.dblClick(screen.getByText("My Games"));
     await screen.findByText("Gamma, Gerd");
-    expect(api.openDatabase).toHaveBeenCalledWith("D:\\My Games.sqlite");
+    expect(api.createDatabase).toHaveBeenCalledWith("D:\\My Games.sqlite");
+    expect(api.openDatabase).not.toHaveBeenCalled();
     expect(localStorage.getItem("chessvault.myGames")).toBe("D:\\My Games.sqlite");
 
+    // Later it is only opened: if it was moved, that is an error instead of a new empty database.
     await userEvent.click(button("Databases"));
     await userEvent.dblClick(screen.getByText("My Games"));
-    await waitFor(() => expect(api.openDatabase).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.openDatabase).toHaveBeenCalledWith("D:\\My Games.sqlite"));
     expect(api.chooseFileToSave).toHaveBeenCalledTimes(2);
   });
 
@@ -203,11 +223,11 @@ describe("My Games and the tile menu", () => {
     vi.mocked(api.chooseFileToSave).mockResolvedValueOnce("E:\\other.sqlite");
     await userEvent.click((await menu()).getByRole("button", { name: "Choose another My Games database…" }));
     await screen.findByText("Gamma, Gerd");
-    expect(api.openDatabase).toHaveBeenCalledWith("E:\\other.sqlite");
+    expect(api.createDatabase).toHaveBeenCalledWith("E:\\other.sqlite");
     await userEvent.click(button("Databases"));
 
     await userEvent.click((await menu()).getByRole("button", { name: "Open" }));
-    await waitFor(() => expect(api.openDatabase).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.openDatabase).toHaveBeenCalledWith("E:\\other.sqlite"));
     await userEvent.click(button("Databases"));
     await userEvent.click((await menu()).getByRole("button", { name: "Remove from list" }));
     expect(screen.getByText("Double-click to create")).toBeTruthy();
@@ -235,8 +255,9 @@ describe("My Games and the tile menu", () => {
   it("opens a file from the Add database tile", async () => {
     render(<App />);
     vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce(CLUB);
-    await userEvent.click(screen.getByText("Add database…"));
+    await userEvent.dblClick(screen.getByText("Add database…"));
     expect(await screen.findByText("Gamma, Gerd")).toBeTruthy();
+    expect(api.chooseFileToOpen).toHaveBeenCalledOnce();
   });
 });
 
@@ -314,8 +335,38 @@ describe("saving games", () => {
     await userEvent.click(button("Undo last save"));
     await waitFor(() => expect(status()).toBe("Restored game 2."));
     vi.mocked(api.undoGame).mockResolvedValueOnce(false);
+    const reads = vi.mocked(api.getGame).mock.calls.length;
     await userEvent.click(button("Undo last save"));
     await waitFor(() => expect(status()).toBe("Game 2 has no earlier version."));
+    expect(api.getGame).toHaveBeenCalledTimes(reads);
+  });
+
+  it("asks before Undo last save throws away unsaved changes", async () => {
+    await openClub();
+    await openGame("Gamma, Gerd");
+    fireEvent.change(screen.getByLabelText("Event"), { target: { value: "Changed" } });
+    await userEvent.click(button("Undo last save"));
+    await userEvent.click(dialog().getByRole("button", { name: "Cancel" }));
+    expect(api.undoGame).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Event") as HTMLInputElement).value).toBe("Changed");
+    await userEvent.click(button("Undo last save"));
+    await userEvent.click(dialog().getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(api.undoGame).toHaveBeenCalledWith(2));
+  });
+
+  it("asks before closing the window with unsaved changes", async () => {
+    await openClub();
+    await openGame("Gamma, Gerd");
+    act(() => closeRequested());
+    await waitFor(() => expect(api.closeWindow).toHaveBeenCalledOnce());
+
+    fireEvent.change(screen.getByLabelText("Event"), { target: { value: "Changed" } });
+    act(() => closeRequested());
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(api.closeWindow).toHaveBeenCalledOnce();
+    act(() => closeRequested());
+    await userEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(api.closeWindow).toHaveBeenCalledTimes(2));
   });
 
   it("saves a new game into the open database with its details", async () => {
@@ -351,13 +402,14 @@ describe("saving games", () => {
     vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\mine.pgn");
     await saveTo("An existing PGN file or database…");
     await waitFor(() => expect(status()).toBe("Saved the game to C:\\games\\mine.pgn."));
+    expect(api.addGameTo).toHaveBeenLastCalledWith("C:\\games\\mine.pgn", expect.any(String), false);
     expect(screen.queryByText("Unsaved changes")).toBeNull();
 
     await userEvent.click(button("play e7e5"));
     vi.mocked(api.chooseFileToSave).mockResolvedValueOnce("C:\\games\\new.pgn");
     await saveTo("A new PGN file or database…");
     expect(vi.mocked(api.chooseFileToSave).mock.calls[0][2]).toBe("C:\\games\\? - ?.pgn");
-    await waitFor(() => expect(api.addGameTo).toHaveBeenLastCalledWith("C:\\games\\new.pgn", expect.stringContaining("1. e4 e5")));
+    await waitFor(() => expect(api.addGameTo).toHaveBeenLastCalledWith("C:\\games\\new.pgn", expect.stringContaining("1. e4 e5"), true));
   });
 
   it("keeps the game when the details are cancelled or saving fails", async () => {

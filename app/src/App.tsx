@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import { ContextMenu, Dialog } from "./Dialog";
 import { DatabaseTiles } from "./DatabaseTiles";
@@ -49,6 +49,14 @@ function App() {
     }
   }
 
+  // Closing the window asks about unsaved changes like every other way of leaving a game. The
+  // listener is set up once and always runs the newest version of the handler.
+  const onClose = useRef(async () => {});
+  onClose.current = async () => {
+    if (await confirmDiscard()) await api.closeWindow();
+  };
+  useEffect(() => api.onCloseRequested(() => void onClose.current()), []);
+
   /// Asks before throwing away unsaved changes. Returns whether to go on.
   async function confirmDiscard() {
     if (!editor.dirty) return true;
@@ -61,20 +69,23 @@ function App() {
 
   // Files and databases.
 
-  /// Opens a database or PGN file, asking which one when `path` is not given.
-  async function openFile(path?: string) {
+  /// Opens a database or PGN file, asking which one when `path` is not given. With `create`, a
+  /// database that doesn't exist yet is created; otherwise a missing file is an error.
+  async function openFile(path?: string, create = false) {
     if (!(await confirmDiscard())) return;
-    const chosen = path ?? (await api.chooseFileToOpen("Open a PGN file or database", [api.GAME_FILES, api.PGN_FILES, api.DATABASE_FILES], folderOf(dbPath)));
+    const chosen =
+      path ??
+      (await api.chooseFileToOpen("Open a PGN file or database", [api.GAME_FILES, api.PGN_FILES, api.DATABASE_FILES], folderOf(dbPath)));
     if (chosen === null) return;
-    setDbPath(chosen);
     let opened: Awaited<ReturnType<typeof api.openDatabase>>;
     try {
-      opened = await api.openDatabase(chosen);
+      opened = await (create ? api.createDatabase(chosen) : api.openDatabase(chosen));
     } catch (error) {
       setStatus(String(error));
       await offerToForget(chosen, error);
       return;
     }
+    setDbPath(chosen);
     setRecent(addRecent(chosen));
     await run(async () => {
       setIsOpen(true);
@@ -109,14 +120,12 @@ function App() {
 
   /// Opens My Games, asking where to create it the first time or when `choose` is set.
   async function openMyGames(choose = false) {
-    let path = myGames;
-    if (!path || choose) {
-      path = await api.chooseFileToSave("Where to keep My Games", [api.DATABASE_FILES], path ?? "My Games.sqlite");
-      if (!path) return;
-      saveMyGames(path);
-      setMyGames(path);
-    }
-    await openFile(path);
+    if (myGames && !choose) return openFile(myGames);
+    const path = await api.chooseFileToSave("Where to keep My Games", [api.DATABASE_FILES], myGames ?? "My Games.sqlite");
+    if (!path) return;
+    saveMyGames(path);
+    setMyGames(path);
+    await openFile(path, true);
   }
 
   function forgetFile(path: string, isMyGames: boolean) {
@@ -238,17 +247,18 @@ function App() {
         await reloadGame(id);
         return;
       }
-      await api.addGameTo(target, pgn);
+      await api.addGameTo(target.path, pgn, target.replace);
       editor.markSaved(pgn);
-      setRecent(addRecent(target));
-      setStatus(`Saved the game to ${target}.`);
+      setRecent(addRecent(target.path));
+      setStatus(`Saved the game to ${target.path}.`);
       await list.reload();
     });
   }
 
   /// Asks for the players and event of a new game and puts them in its headers, then where to save it.
-  /// Returns THIS_DATABASE, the path of another file, or null when cancelled.
-  async function askNewGameDetails(): Promise<string | null> {
+  /// Returns THIS_DATABASE, another file (to replace when it is a new file the user chose to replace),
+  /// or null when cancelled.
+  async function askNewGameDetails(): Promise<typeof THIS_DATABASE | { path: string; replace: boolean } | null> {
     const { tree } = editor;
     if (!tree) return null;
     const fields = await dialogs.askFields("Save as new game", [
@@ -265,21 +275,28 @@ function App() {
     for (const name of [...HEADER_FIELDS, "Result"]) tree.headers.set(name, headerValue(fields[name]));
     editor.changed();
     if (fields["Save to"] === THIS_DATABASE) return THIS_DATABASE;
-    return fields["Save to"] === EXISTING_FILE
-      ? api.chooseFileToOpen("Add the game to", [api.GAME_FILES, api.PGN_FILES, api.DATABASE_FILES], folderOf(dbPath))
-      : api.chooseFileToSave(
-          "Save the game as",
-          [api.PGN_FILES, api.DATABASE_FILES],
-          `${folderOf(dbPath)}${tree.headers.get("White")} - ${tree.headers.get("Black")}.pgn`,
-        );
+    if (fields["Save to"] === EXISTING_FILE) {
+      const path = await api.chooseFileToOpen("Add the game to", [api.GAME_FILES, api.PGN_FILES, api.DATABASE_FILES], folderOf(dbPath));
+      return path === null ? null : { path, replace: false };
+    }
+    // Windows' save window has already asked before replacing an existing file.
+    const path = await api.chooseFileToSave(
+      "Save the game as",
+      [api.PGN_FILES, api.DATABASE_FILES],
+      `${folderOf(dbPath)}${tree.headers.get("White")} - ${tree.headers.get("Black")}.pgn`,
+    );
+    return path === null ? null : { path, replace: true };
   }
 
   async function undoSave() {
     const id = editor.gameId;
-    if (id === null) return;
+    if (id === null || !(await confirmDiscard())) return;
     await run(async () => {
-      const restored = await api.undoGame(id);
-      setStatus(restored ? `Restored game ${id}.` : `Game ${id} has no earlier version.`);
+      if (!(await api.undoGame(id))) {
+        setStatus(`Game ${id} has no earlier version.`);
+        return;
+      }
+      setStatus(`Restored game ${id}.`);
       await reloadGame(id);
     });
   }

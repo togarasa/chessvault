@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Explorer, ExplorerDatabase, explore, hasLichessToken, setLichessToken } from "./api";
+import { ExplorerDatabase } from "./types";
+import { useExplorer } from "./useExplorer";
 
 /// White wins, draws and Black wins as a bar of three segments.
 function ResultBar({ white, draws, black }: { white: number; draws: number; black: number }) {
@@ -22,54 +22,8 @@ function ResultBar({ white, draws, black }: { white: number; draws: number; blac
 
 /// Lichess opening explorer statistics for the board position. Clicking a move plays it.
 export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: string) => void }) {
-  const [database, setDatabase] = useState<ExplorerDatabase>("masters");
-  const [data, setData] = useState<Explorer | null>(null);
-  const [error, setError] = useState("");
-  const [hasToken, setHasToken] = useState<boolean | null>(null);
-  const [editingToken, setEditingToken] = useState(false);
-  const [tokenInput, setTokenInput] = useState("");
-  const [reload, setReload] = useState(0);
-
-  useEffect(() => {
-    hasLichessToken()
-      .then(setHasToken)
-      .catch(() => setHasToken(false));
-  }, []);
-
-  // Look up the position, waiting briefly so quick move steps make one request.
-  useEffect(() => {
-    if (!hasToken) return;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      explore(database, fen)
-        .then((result) => {
-          if (cancelled) return;
-          setData(result);
-          setError("");
-        })
-        .catch((e) => {
-          if (cancelled) return;
-          setData(null);
-          setError(String(e));
-        });
-    }, 300);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [fen, database, hasToken, reload]);
-
-  async function saveToken() {
-    try {
-      await setLichessToken(tokenInput);
-      setHasToken(tokenInput.trim() !== "");
-      setTokenInput("");
-      setEditingToken(false);
-      setReload((n) => n + 1);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
+  const { database, setDatabase, data, error, hasToken, editingToken, setEditingToken, tokenInput, setTokenInput, saveToken } =
+    useExplorer(fen);
 
   const showTokenForm = hasToken === false || editingToken;
 

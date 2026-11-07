@@ -11,6 +11,9 @@ export type MoveNode = {
   fen: string;
   /// Half-moves from the start of the game; the root has 0 unless the game starts from a FEN.
   ply: number;
+  /// Comments written before the move, e.g. at the start of a variation.
+  startingComments: string[];
+  /// Comments written after the move.
   comments: string[];
   nags: number[];
   parent: MoveNode | null;
@@ -26,7 +29,7 @@ export type GameTree = {
 let nextId = 1;
 
 function newNode(parent: MoveNode | null, san: string, pos: Position, ply: number): MoveNode {
-  return { id: nextId++, san, fen: makeFen(pos.toSetup()), ply, comments: [], nags: [], parent, children: [] };
+  return { id: nextId++, san, fen: makeFen(pos.toSetup()), ply, startingComments: [], comments: [], nags: [], parent, children: [] };
 }
 
 /// Parses the first game in `pgn` with its variations, comments and symbols.
@@ -51,7 +54,8 @@ export function parseGame(pgn: string): GameTree {
       const next = pos.clone();
       const san = makeSanAndPlay(next, move);
       const node = newNode(into, san, next, into.ply + 1);
-      node.comments = [...(child.data.startingComments ?? []), ...(child.data.comments ?? [])];
+      node.startingComments = child.data.startingComments ?? [];
+      node.comments = child.data.comments ?? [];
       node.nags = child.data.nags ?? [];
       into.children.push(node);
       build(child, node, next);
@@ -71,6 +75,7 @@ export function writeGame(tree: GameTree): string {
     for (const child of from.children) {
       const node = new ChildNode<PgnNodeData>({
         san: child.san,
+        startingComments: child.startingComments.length ? child.startingComments : undefined,
         comments: child.comments.length ? child.comments : undefined,
         nags: child.nags.length ? child.nags : undefined,
       });
@@ -87,10 +92,13 @@ export function position(node: MoveNode): Position {
   return Chess.fromSetup(parseFen(node.fen).unwrap()).unwrap();
 }
 
-/// The child reached by `move`, or a new child for it that is not attached yet.
-export function childFor(node: MoveNode, move: Move): { node: MoveNode; existing: boolean } {
+/// The child reached by `move`, or a new child for it that is not attached yet. Null when the move
+/// is not legal in the position, e.g. a move from an explorer table for another position.
+export function childFor(node: MoveNode, move: Move): { node: MoveNode; existing: boolean } | null {
   const pos = position(node);
-  const san = makeSanAndPlay(pos, normalizeMove(pos, move));
+  const normalized = normalizeMove(pos, move);
+  if (!pos.isLegal(normalized)) return null;
+  const san = makeSanAndPlay(pos, normalized);
   const existing = node.children.find((c) => c.san === san);
   if (existing) return { node: existing, existing: true };
   return { node: newNode(node, san, pos, node.ply + 1), existing: false };
@@ -165,12 +173,18 @@ export function nagText(nag: number): string {
   return NAG_TEXT.get(nag) ?? `$${nag}`;
 }
 
-/// Sets a move symbol (1–9) or a position symbol (10 and up), replacing one of the same kind.
-/// Setting the symbol that is already there removes it.
+/// The kind of a symbol: move symbols (1–9) and position symbols (10–19) allow one of each;
+/// all others (such as $146 for a novelty) stand on their own.
+function nagKind(nag: number): "move" | "position" | number {
+  if (nag < 10) return "move";
+  if (nag < 20) return "position";
+  return nag;
+}
+
+/// Sets a symbol, replacing one of the same kind. Setting the symbol that is already there removes it.
 export function toggleNag(node: MoveNode, nag: number) {
-  const isMove = (n: number) => n < 10;
   const had = node.nags.includes(nag);
-  node.nags = node.nags.filter((n) => isMove(n) !== isMove(nag));
+  node.nags = node.nags.filter((n) => nagKind(n) !== nagKind(nag));
   if (!had) node.nags.push(nag);
   node.nags.sort((a, b) => a - b);
 }

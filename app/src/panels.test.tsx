@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { Board } from "./Board";
 import { EngineLine } from "./engine";
+import { Explorer } from "./types";
 import { EnginePanel } from "./EnginePanel";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { GameView } from "./GameView";
@@ -150,7 +151,7 @@ describe("EnginePanel", () => {
   });
 });
 
-const explorerData: api.Explorer = {
+const explorerData: Explorer = {
   white: 50,
   draws: 30,
   black: 20,
@@ -218,7 +219,7 @@ describe("ExplorerPanel", () => {
 
   it("ignores an answer that arrives after the position changed", async () => {
     vi.mocked(api.hasLichessToken).mockResolvedValue(true);
-    let answer: (data: api.Explorer) => void = () => {};
+    let answer: (data: Explorer) => void = () => {};
     let fail: (error: string) => void = () => {};
     vi.mocked(api.explore)
       .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
@@ -236,6 +237,22 @@ describe("ExplorerPanel", () => {
     await screen.findByText("e4");
     expect(screen.queryByText("A00 Start position")).toBeNull();
     expect(screen.queryByText("too late")).toBeNull();
+  });
+
+  it("hides the moves of the previous position until the new one is looked up", async () => {
+    vi.mocked(api.hasLichessToken).mockResolvedValue(true);
+    let answer: (data: Explorer) => void = () => {};
+    vi.mocked(api.explore).mockResolvedValueOnce(explorerData).mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const onPlay = vi.fn();
+    const { rerender } = render(<ExplorerPanel fen={START_FEN} onPlay={onPlay} />);
+    await screen.findByText("e4");
+    rerender(<ExplorerPanel fen={AFTER_E4} onPlay={onPlay} />);
+    // White's moves from the start position must not be playable after 1. e4.
+    expect(screen.queryByText("d4")).toBeNull();
+    await waitFor(() => expect(api.explore).toHaveBeenCalledTimes(2));
+    await act(async () => answer({ ...explorerData, moves: [{ uci: "e7e5", san: "e5", white: 1, draws: 1, black: 1, averageRating: null }] }));
+    await userEvent.click(await screen.findByText("e5"));
+    expect(onPlay).toHaveBeenCalledWith("e7e5");
   });
 
   it("changes or removes the token", async () => {

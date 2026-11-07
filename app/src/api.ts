@@ -2,15 +2,19 @@
 /// system's file windows. Everything else calls these functions (see docs/ARCHITECTURE.md).
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openFileWindow, save as saveFileWindow } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { EngineLine } from "./engine";
 import { Filter } from "./filter";
-import { Game, GameSummary, OpenResult, Order } from "./types";
+import { Explorer, ExplorerDatabase, Game, GameSummary, OpenResult, Order } from "./types";
 
 // Databases and games.
 
+/// Opens an existing database or PGN file; a missing file is an error.
 export const openDatabase = (path: string) => invoke<OpenResult>("open_database", { path });
+/// Creates an empty database, or opens it when it already exists.
+export const createDatabase = (path: string) => invoke<OpenResult>("create_database", { path });
 export const importPgn = (path: string) => invoke<number>("import_pgn", { path });
 export const listGames = (order: Order, limit: number, offset: number) =>
   invoke<GameSummary[]>("list_games", { order, limit, offset });
@@ -20,8 +24,10 @@ export const getGame = (id: number) => invoke<Game | null>("get_game", { id });
 export const saveGame = (id: number, pgn: string) => invoke<void>("save_game", { id, pgn });
 /// Adds a game to the open database and returns its id.
 export const addGame = (pgn: string) => invoke<number>("add_game", { pgn });
-/// Adds a game to another PGN file or database, creating it if needed.
-export const addGameTo = (path: string, pgn: string) => invoke<void>("add_game_to", { path, pgn });
+/// Adds a game to another PGN file or database, creating it if needed; with `replace`, a new PGN
+/// file replaces an old one of that name.
+export const addGameTo = (path: string, pgn: string, replace: boolean) =>
+  invoke<void>("add_game_to", { path, pgn, replace });
 export const deleteGame = (id: number) => invoke<boolean>("delete_game", { id });
 /// Restores the version before the last save; false when there is none.
 export const undoGame = (id: number) => invoke<boolean>("undo_game", { id });
@@ -41,25 +47,6 @@ export function onEngineLine(onLine: (line: EngineLine) => void): () => void {
 }
 
 // Lichess.
-
-export type ExplorerDatabase = "masters" | "lichess";
-
-export type ExplorerMove = {
-  uci: string;
-  san: string;
-  white: number;
-  draws: number;
-  black: number;
-  averageRating: number | null;
-};
-
-export type Explorer = {
-  white: number;
-  draws: number;
-  black: number;
-  moves: ExplorerMove[];
-  opening: { eco: string; name: string } | null;
-};
 
 export const explore = (database: ExplorerDatabase, fen: string) => invoke<Explorer>("explore", { database, fen });
 export const hasLichessToken = () => invoke<boolean>("has_lichess_token");
@@ -86,3 +73,17 @@ export async function chooseFileToSave(title: string, kinds: FileKind[], suggest
 }
 
 export const showInFolder = (path: string) => revealItemInDir(path);
+
+// The window.
+
+/// Calls `onClose` instead of closing when the user closes the window; returns a function that
+/// stops listening. `closeWindow` then closes it for real.
+export function onCloseRequested(onClose: () => void): () => void {
+  const unlisten = getCurrentWindow().onCloseRequested((event) => {
+    event.preventDefault();
+    onClose();
+  });
+  return () => void unlisten.then((stop) => stop());
+}
+
+export const closeWindow = () => getCurrentWindow().destroy();

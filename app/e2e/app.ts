@@ -32,6 +32,8 @@ async function launch(dir: string): Promise<{ app: ChildProcess; browser: Browse
       ...process.env,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
       WEBVIEW2_USER_DATA_FOLDER: join(dir, "profile"),
+      // The Lichess token lives in the app's config folder; give the test app its own.
+      CHESSVAULT_CONFIG_DIR: join(dir, "config"),
     },
   });
   const cdpUrl = `http://127.0.0.1:${port}`;

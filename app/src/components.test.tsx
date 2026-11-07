@@ -290,8 +290,14 @@ describe("DatabaseTiles", () => {
     expect(h.onMenu).toHaveBeenLastCalledWith("D:\\mine.sqlite", true, 1, 2);
     await userEvent.dblClick(mine);
     expect(h.onMyGames).toHaveBeenCalledOnce();
+    // Like the other tiles it opens on a double-click (or Enter), and only once.
     await userEvent.click(screen.getByText("Add database…"));
-    expect(h.onAdd).toHaveBeenCalled();
+    expect(h.onAdd).not.toHaveBeenCalled();
+    await userEvent.dblClick(screen.getByText("Add database…"));
+    expect(h.onAdd).toHaveBeenCalledOnce();
+    fireEvent.keyDown(screen.getByText("Add database…").closest("button")!, { key: "Enter" });
+    fireEvent.keyDown(screen.getByText("Add database…").closest("button")!, { key: "a" });
+    expect(h.onAdd).toHaveBeenCalledTimes(2);
   });
 
   it("has no menu for My Games before it exists", () => {
@@ -374,5 +380,15 @@ describe("SearchDialog", () => {
     fireEvent.mouseDown(container.querySelector(".overlay")!);
     expect(onClose).toHaveBeenCalledTimes(3);
     expect(onSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe("Notation, comments before a move", () => {
+  it("shows a comment written before a move in front of it, with the move number again", () => {
+    const tree = parseGame("1. e4 ( { Better is } 1. d4 d5 ) 1... e5 *");
+    const { container } = render(<Notation root={tree.root} current={tree.root} onSelect={vi.fn()} onMenu={vi.fn()} />);
+    const variation = container.querySelector(".variation")!;
+    expect(variation.textContent).toBe("Better is1. d4d5");
+    expect(variation.firstElementChild!.className).toBe("comment");
   });
 });
