@@ -34,28 +34,43 @@ struct OpenResult {
     imported: usize,
 }
 
-/// Opens a database, or a PGN file through a database beside it.
-#[tauri::command]
-fn open_database(path: String, state: State<'_, AppState>) -> Result<OpenResult, String> {
-    let opened = db::open_path(Path::new(&path)).map_err(|e| e.to_string())?;
+/// Makes `opened` the open database.
+fn use_database(opened: db::Opened, state: &State<'_, AppState>) -> Result<OpenResult, String> {
     let games = opened.store.count().map_err(|e| e.to_string())?;
     let database = opened.path.display().to_string();
     *state.store.lock().map_err(|e| e.to_string())? = Some(opened.store);
     Ok(OpenResult { database, games, imported: opened.imported })
 }
 
-#[tauri::command]
+// Commands that touch files or the database are `async`, so Tauri runs them off the window's
+// thread and a large import or export doesn't freeze the window.
+
+/// Opens a database, or a PGN file through a database beside it. A missing file is an error.
+#[tauri::command(async)]
+fn open_database(path: String, state: State<'_, AppState>) -> Result<OpenResult, String> {
+    let opened = db::open_path(Path::new(&path)).map_err(|e| e.to_string())?;
+    use_database(opened, &state)
+}
+
+/// Creates an empty database (or opens it if it exists) and makes it the open one.
+#[tauri::command(async)]
+fn create_database(path: String, state: State<'_, AppState>) -> Result<OpenResult, String> {
+    let opened = db::create_database(Path::new(&path)).map_err(|e| e.to_string())?;
+    use_database(opened, &state)
+}
+
+#[tauri::command(async)]
 fn import_pgn(path: String, state: State<'_, AppState>) -> Result<usize, String> {
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     with_store(&state, |store| store.import_pgn(&text).map_err(|e| e.to_string()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_games(order: Order, limit: i64, offset: i64, state: State<'_, AppState>) -> Result<Vec<GameSummary>, String> {
     with_store(&state, |store| store.list(order, limit, offset).map_err(|e| e.to_string()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn search_games(
     filter: Filter,
     order: Order,
@@ -66,48 +81,49 @@ fn search_games(
     with_store(&state, |store| store.search(&filter, order, limit, offset).map_err(|e| e.to_string()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_game(id: i64, state: State<'_, AppState>) -> Result<Option<Game>, String> {
     with_store(&state, |store| store.get(id).map_err(|e| e.to_string()))
 }
 
 /// Adds a new game and returns its id.
-#[tauri::command]
+#[tauri::command(async)]
 fn add_game(pgn: String, state: State<'_, AppState>) -> Result<i64, String> {
     with_store(&state, |store| store.add_game(&pgn).map_err(|e| e.to_string()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_game(id: i64, pgn: String, state: State<'_, AppState>) -> Result<(), String> {
     with_store(&state, |store| store.update_pgn(id, &pgn).map_err(|e| e.to_string()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_game(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     with_store(&state, |store| store.delete_game(id).map_err(|e| e.to_string()))
 }
 
 /// The number of games in each file, for the database tiles; `None` for a file that is
 /// missing or can't be read. Nothing is created or changed.
-#[tauri::command]
+#[tauri::command(async)]
 fn database_counts(paths: Vec<String>) -> Vec<Option<i64>> {
     paths.iter().map(|p| db::game_count(Path::new(p)).ok().flatten()).collect()
 }
 
-/// Adds a game to another database or PGN file, creating it if needed.
-#[tauri::command]
-fn add_game_to(path: String, pgn: String) -> Result<(), String> {
-    db::add_game_to(Path::new(path.trim().trim_matches('"')), &pgn).map_err(|e| e.to_string())
+/// Adds a game to another database or PGN file, creating it if needed; with `replace`, a new
+/// PGN file replaces an old one of that name.
+#[tauri::command(async)]
+fn add_game_to(path: String, pgn: String, replace: bool) -> Result<(), String> {
+    db::add_game_to(Path::new(path.trim().trim_matches('"')), &pgn, replace).map_err(|e| e.to_string())
 }
 
 /// Writes games to a PGN file: the games in `ids`, or all games. Returns how many were written.
-#[tauri::command]
+#[tauri::command(async)]
 fn export_pgn(path: String, ids: Option<Vec<i64>>, state: State<'_, AppState>) -> Result<usize, String> {
     let path = PathBuf::from(path.trim().trim_matches('"'));
     with_store(&state, |store| store.export_pgn_file(&path, ids.as_deref()).map_err(|e| e.to_string()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn undo_game(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     with_store(&state, |store| store.undo(id).map_err(|e| e.to_string()))
 }
@@ -145,8 +161,12 @@ fn stop_analysis(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// Where the Lichess token is kept: a file in the app's config folder on this computer.
+/// CHESSVAULT_CONFIG_DIR replaces the folder, so test runs never read or change the user's own token.
 fn token_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let dir = match std::env::var_os("CHESSVAULT_CONFIG_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => app.path().app_config_dir().map_err(|e| e.to_string())?,
+    };
     Ok(dir.join("lichess-token"))
 }
 
@@ -185,6 +205,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             open_database,
+            create_database,
             import_pgn,
             list_games,
             search_games,

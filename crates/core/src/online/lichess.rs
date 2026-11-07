@@ -2,10 +2,14 @@
 //! explorer; a token with no scopes is enough.
 
 use std::fmt;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 const EXPLORER: &str = "https://explorer.lichess.org";
+
+/// How long to wait for Lichess before giving up, so a stuck request doesn't hang the panel.
+const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Which games the explorer counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -82,7 +86,8 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Client { http: reqwest::Client::default(), explorer: EXPLORER.to_string() }
+        let http = reqwest::Client::builder().timeout(TIMEOUT).build().unwrap_or_default();
+        Client { http, explorer: EXPLORER.to_string() }
     }
 }
 

@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS revisions (
     pgn      TEXT NOT NULL,
     saved_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS games_white ON games(white);
 CREATE INDEX IF NOT EXISTS games_black ON games(black);
 CREATE INDEX IF NOT EXISTS revisions_game ON revisions(game_id);
@@ -52,6 +56,9 @@ pub enum Error {
     Io(std::io::Error),
     InvalidGame(String),
     NotADatabase(PathBuf),
+    NotFound(PathBuf),
+    /// Games can't be written to this kind of file; the text says which kinds are allowed.
+    WrongFileType(PathBuf, &'static str),
 }
 
 impl fmt::Display for Error {
@@ -65,6 +72,10 @@ impl fmt::Display for Error {
                 "{} is not a ChessVault database; open a .sqlite database or a .pgn file",
                 path.display()
             ),
+            Error::NotFound(path) => write!(f, "{} was not found; it may have been moved or deleted", path.display()),
+            Error::WrongFileType(path, allowed) => {
+                write!(f, "{} can't be written to; choose {allowed}", path.display())
+            }
         }
     }
 }
@@ -96,20 +107,25 @@ pub struct Opened {
 /// with the same name and a `.sqlite` extension, and imports the file's games
 /// the first time, so opening the same PGN again doesn't duplicate them.
 pub fn open_path(path: &Path) -> Result<Opened> {
-    let is_pgn = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pgn"));
-    if !is_pgn {
+    // A database that was moved or deleted must not come back empty.
+    if !path.exists() {
+        return Err(Error::NotFound(path.to_path_buf()));
+    }
+    if !has_extension(path, "pgn") {
         let store = Store::open(path)?;
         return Ok(Opened { store, path: path.to_path_buf(), imported: 0 });
     }
     let db_path = path.with_extension("sqlite");
     let existed = db_path.exists();
     let mut store = Store::open(&db_path)?;
-    if store.count()? > 0 {
+    // Databases made before the marker existed count as imported when they have games.
+    if store.meta(PGN_IMPORTED)?.is_some() || store.count()? > 0 {
         return Ok(Opened { store, path: db_path, imported: 0 });
     }
     let imported = fs::read_to_string(path)
         .map_err(Error::from)
-        .and_then(|text| store.import_pgn(&text));
+        .and_then(|text| store.import_pgn(&text))
+        .and_then(|imported| store.set_meta(PGN_IMPORTED, "1").map(|()| imported));
     match imported {
         Ok(imported) => Ok(Opened { store, path: db_path, imported }),
         Err(e) => {
@@ -123,21 +139,47 @@ pub fn open_path(path: &Path) -> Result<Opened> {
     }
 }
 
+/// The meta key that records that a PGN file's games were imported into its database.
+const PGN_IMPORTED: &str = "pgn_imported";
+
+fn has_extension(path: &Path, ext: &str) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// Creates a new, empty database at `path`, or opens it if it already exists.
+pub fn create_database(path: &Path) -> Result<Opened> {
+    if !has_extension(path, "sqlite") {
+        return Err(Error::WrongFileType(path.to_path_buf(), "a .sqlite file"));
+    }
+    Ok(Opened { store: Store::open(path)?, path: path.to_path_buf(), imported: 0 })
+}
+
 /// Adds one game to the file at `path`, creating it if needed: a `.pgn` file gets the game
 /// appended, any other path is opened as a database. A PGN file's database from [`open_path`],
 /// if there is one, gets the game too so the two stay alike.
-pub fn add_game_to(path: &Path, pgn: &str) -> Result<()> {
-    let is = |ext: &str| path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext));
-    if !is("pgn") && !is("sqlite") {
-        return Err(Error::InvalidGame(format!(
-            "{} is not a .pgn or .sqlite file; games can only be saved to those",
-            path.display()
-        )));
+///
+/// With `replace`, the file becomes a new one holding only this game: an existing PGN file is
+/// overwritten. An existing database, or a PGN file with a database beside it, is refused
+/// rather than thrown away.
+pub fn add_game_to(path: &Path, pgn: &str, replace: bool) -> Result<()> {
+    if !has_extension(path, "pgn") && !has_extension(path, "sqlite") {
+        return Err(Error::WrongFileType(path.to_path_buf(), "a .pgn or .sqlite file"));
     }
     let pgn = single_game(pgn)?;
     check_game(&pgn)?;
-    if is("sqlite") {
+    let db_path = path.with_extension("sqlite");
+    if replace && db_path.exists() {
+        return Err(Error::InvalidGame(format!(
+            "{} already has a ChessVault database; add the game to it instead of replacing it",
+            path.display()
+        )));
+    }
+    if has_extension(path, "sqlite") {
         Store::open(path)?.add_game(&pgn)?;
+        return Ok(());
+    }
+    if replace {
+        fs::write(path, format!("{}\n\n", pgn.trim()))?;
         return Ok(());
     }
     let existing = match fs::read(path) {
@@ -157,7 +199,6 @@ pub fn add_game_to(path: &Path, pgn: &str) -> Result<()> {
     let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
     write!(file, "{separator}{}\n\n", pgn.trim())?;
     file.sync_all()?;
-    let db_path = path.with_extension("sqlite");
     if db_path.exists() {
         Store::open(&db_path)?.add_game(&pgn)?;
     }
@@ -337,7 +378,9 @@ impl Order {
             SortColumn::Date => "date",
         };
         let dir = if self.descending { "DESC" } else { "ASC" };
-        format!("ORDER BY {column} IS NULL OR {column} = '', {column} {dir}, id {dir}")
+        // PGN writes unknown values as "?" (or "????.??.??" for a date); they go last like empty ones.
+        let unknown = format!("{column} IS NULL OR {column} = '' OR CAST({column} AS TEXT) LIKE '?%'");
+        format!("ORDER BY {unknown}, {column} {dir}, id {dir}")
     }
 }
 
@@ -455,6 +498,10 @@ impl Store {
 
     /// Exports games to the PGN file at `path`, replacing it only once all games are written.
     pub fn export_pgn_file(&self, path: &Path, ids: Option<&[i64]>) -> Result<usize> {
+        // Never replace a database, a ChessBase file or anything else by mistake.
+        if !has_extension(path, "pgn") {
+            return Err(Error::WrongFileType(path.to_path_buf(), "a .pgn file"));
+        }
         let mut tmp_name = path.as_os_str().to_owned();
         tmp_name.push(".tmp");
         let tmp = PathBuf::from(tmp_name);
@@ -478,6 +525,15 @@ impl Store {
         let deleted = tx.execute("DELETE FROM games WHERE id = ?1", params![id])? > 0;
         tx.commit()?;
         Ok(deleted)
+    }
+
+    fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0)).optional()?)
+    }
+
+    fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        Ok(())
     }
 
     /// Number of games in the database.
@@ -675,19 +731,42 @@ fn tag(pgn: &str, name: &str) -> String {
                 .strip_prefix(name)?
                 .strip_prefix(' ')?
                 .strip_prefix('"')?;
-            Some(rest.strip_suffix("\"]")?.to_string())
+            Some(unescape(rest.strip_suffix("\"]")?))
         })
         .unwrap_or_default()
 }
 
-/// Splits PGN text into games. Each game starts at an `[Event` tag.
+/// A tag value without PGN's escapes: `\"` is a quote and `\\` a backslash.
+fn unescape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(next @ ('"' | '\\'))) => {
+                out.push(next);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Splits PGN text into games. A game is its tags followed by its moves; a tag line after the
+/// moves starts the next game, whichever tag comes first.
 fn split_games(text: &str) -> Result<Vec<String>> {
     let mut games: Vec<String> = Vec::new();
     let mut current = String::new();
+    let mut in_moves = false;
     for line in text.lines() {
-        if line.starts_with("[Event ") && !current.trim().is_empty() {
+        let is_tag = line.trim_start().starts_with('[');
+        if is_tag && in_moves {
             games.push(current.trim().to_string());
             current.clear();
+            in_moves = false;
+        }
+        if !is_tag && !line.trim().is_empty() {
+            in_moves = true;
         }
         current.push_str(line);
         current.push('\n');
@@ -696,11 +775,9 @@ fn split_games(text: &str) -> Result<Vec<String>> {
         games.push(current.trim().to_string());
     }
     for game in &games {
-        if !game.starts_with("[Event ") {
+        if !game.starts_with('[') {
             let first = game.lines().next().unwrap_or("");
-            return Err(Error::InvalidGame(format!(
-                "game does not start with an [Event] tag: {first}"
-            )));
+            return Err(Error::InvalidGame(format!("text before the first game's tags: {first}")));
         }
     }
     Ok(games)
@@ -830,7 +907,7 @@ mod tests {
     fn add_game_to_a_pgn_file_creates_or_appends() {
         let dir = temp_dir("add-to-pgn");
         let one = dir.join("one.pgn");
-        add_game_to(&one, GAME_1).unwrap();
+        add_game_to(&one, GAME_1, false).unwrap();
         assert_eq!(fs::read_to_string(&one).unwrap(), format!("{}\n\n", GAME_1.trim()));
 
         // An existing file without a trailing newline, with a database beside it from opening it.
@@ -838,12 +915,12 @@ mod tests {
         fs::write(&both, GAME_1.trim()).unwrap();
         let crlf = dir.join("crlf.pgn");
         fs::write(&crlf, GAME_1.replace('\n', "\r\n")).unwrap();
-        add_game_to(&crlf, GAME_2).unwrap();
+        add_game_to(&crlf, GAME_2, false).unwrap();
         let crlf_text = fs::read_to_string(&crlf).unwrap();
         assert!(crlf_text.contains("1-0\r\n\n[Event"));
         assert_eq!(Store::open_in_memory().unwrap().import_pgn(&crlf_text).unwrap(), 2);
         open_path(&both).unwrap();
-        add_game_to(&both, GAME_2).unwrap();
+        add_game_to(&both, GAME_2, false).unwrap();
         let text = fs::read_to_string(&both).unwrap();
         assert_eq!(text, format!("{}\n\n{}\n\n", GAME_1.trim(), GAME_2.trim()));
         assert_eq!(Store::open(&dir.join("both.sqlite")).unwrap().count().unwrap(), 2);
@@ -855,12 +932,12 @@ mod tests {
     fn add_game_to_a_database_creates_it_and_refuses_other_files() {
         let dir = temp_dir("add-to-db");
         let db = dir.join("mine.sqlite");
-        add_game_to(&db, GAME_1).unwrap();
-        add_game_to(&db, GAME_2).unwrap();
+        add_game_to(&db, GAME_1, false).unwrap();
+        add_game_to(&db, GAME_2, false).unwrap();
         assert_eq!(Store::open(&db).unwrap().count().unwrap(), 2);
-        assert!(add_game_to(&dir.join("base.cbh"), GAME_1).is_err());
+        assert!(add_game_to(&dir.join("base.cbh"), GAME_1, false).is_err());
         assert!(!dir.join("base.cbh").exists());
-        assert!(add_game_to(&dir.join("bad.pgn"), "[White \"Me\"]\n\n1. e5 *").is_err());
+        assert!(add_game_to(&dir.join("bad.pgn"), "[White \"Me\"]\n\n1. e5 *", false).is_err());
         assert!(!dir.join("bad.pgn").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1025,6 +1102,108 @@ mod tests {
             other => panic!("unexpected result: {:?}", other.err()),
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Review findings of 2026-11-07, each reproduced before it was fixed.
+
+    #[test]
+    fn games_may_start_with_any_tag_and_castle_with_zeros() {
+        let mut store = Store::open_in_memory().unwrap();
+        let text = "[Site \"x\"]\n[Event \"a\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. 0-0 Nf6 *\n\n\
+                    [White \"b\"]\n[Event \"b\"]\n\n1. d4 d5 2. Nc3 Nc6 3. Bf4 Bf5 4. Qd2 Qd7 5. 0-0-0 0-0-0 *\n";
+        assert_eq!(store.import_pgn(text).unwrap(), 2);
+        let list = store.list(Order::default(), 10, 0).unwrap();
+        assert_eq!((list[0].event.as_str(), list[0].plies), ("a", Some(8)));
+        assert_eq!((list[1].white.as_str(), list[1].plies), ("b", Some(10)));
+    }
+
+    #[test]
+    fn a_missing_database_is_not_created_by_opening_it() {
+        let dir = temp_dir("missing");
+        let missing = dir.join("moved.sqlite");
+        assert!(matches!(open_path(&missing), Err(Error::NotFound(_))));
+        assert!(!missing.exists());
+        assert!(matches!(open_path(&dir.join("moved.pgn")), Err(Error::NotFound(_))));
+        assert!(!dir.join("moved.sqlite").exists());
+
+        // Creating one is a separate, deliberate step.
+        let created = create_database(&missing).unwrap();
+        assert_eq!(created.store.count().unwrap(), 0);
+        assert!(missing.exists());
+        assert!(matches!(create_database(&dir.join("x.cbh")), Err(Error::WrongFileType(..))));
+        drop(created);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_every_game_does_not_import_the_pgn_again() {
+        let dir = temp_dir("reimport");
+        let pgn = dir.join("club.pgn");
+        fs::write(&pgn, format!("{GAME_1}\n{GAME_2}")).unwrap();
+        let mut opened = open_path(&pgn).unwrap();
+        assert_eq!(opened.imported, 2);
+        for game in opened.store.list(Order::default(), 10, 0).unwrap() {
+            opened.store.delete_game(game.id).unwrap();
+        }
+        drop(opened);
+        let again = open_path(&pgn).unwrap();
+        assert_eq!((again.imported, again.store.count().unwrap()), (0, 0));
+        drop(again);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_only_writes_pgn_files() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.import_pgn(GAME_1).unwrap();
+        let dir = temp_dir("export-type");
+        for name in ["Big.cbh", "My Games.sqlite", "notes.txt"] {
+            let target = dir.join(name);
+            fs::write(&target, "keep me").unwrap();
+            assert!(matches!(store.export_pgn_file(&target, None), Err(Error::WrongFileType(..))));
+            assert_eq!(fs::read_to_string(&target).unwrap(), "keep me");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_file_replaces_an_old_pgn_but_never_a_database() {
+        let dir = temp_dir("replace");
+        let pgn = dir.join("one.pgn");
+        fs::write(&pgn, GAME_2).unwrap();
+        add_game_to(&pgn, GAME_1, true).unwrap();
+        assert_eq!(fs::read_to_string(&pgn).unwrap(), format!("{}\n\n", GAME_1.trim()));
+
+        let db = dir.join("mine.sqlite");
+        add_game_to(&db, GAME_1, false).unwrap();
+        assert!(add_game_to(&db, GAME_2, true).is_err());
+        assert_eq!(Store::open(&db).unwrap().count().unwrap(), 1);
+        let beside = dir.join("mine.pgn");
+        fs::write(&beside, GAME_2).unwrap();
+        assert!(add_game_to(&beside, GAME_1, true).is_err(), "its database would no longer match");
+        assert_eq!(fs::read_to_string(&beside).unwrap(), GAME_2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unknown_values_sort_last_like_empty_ones() {
+        let mut store = Store::open_in_memory().unwrap();
+        let unknown = GAME_2.replace("Rakhmangulova, Anastasiya", "?").replace("2023.06.14", "????.??.??");
+        store.import_pgn(&format!("{GAME_1}\n{unknown}")).unwrap();
+        for column in [SortColumn::White, SortColumn::Date] {
+            for descending in [false, true] {
+                let list = store.list(Order { column, descending }, 10, 0).unwrap();
+                assert_eq!(list[1].white, "?", "{column:?} descending={descending}");
+            }
+        }
+    }
+
+    #[test]
+    fn tag_values_lose_their_escapes() {
+        assert_eq!(tag("[White \"O\\\"Brien, Pat\"]\n", "White"), "O\"Brien, Pat");
+        assert_eq!(tag("[Site \"C:\\\\Club\"]\n", "Site"), "C:\\Club");
+        assert_eq!(tag("[Site \"a\\b\"]\n", "Site"), "a\\b", "a lone backslash stays");
+        assert_eq!(unescape("end\\"), "end\\");
     }
 
     #[test]

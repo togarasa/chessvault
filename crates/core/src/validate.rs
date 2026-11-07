@@ -108,7 +108,9 @@ fn check_token(token: &str, lines: &mut [Line], main: &mut Vec<Step>) -> Result<
     if matches!(token, "*" | "1-0" | "0-1" | "1/2-1/2") {
         return Ok(());
     }
-    let mut san = token;
+    // Some programs write castling with zeros; results like 1-0 were handled above.
+    let token = &token.replace("0-0-0", "O-O-O").replace("0-0", "O-O");
+    let mut san = token.as_str();
     if san.starts_with(|c: char| c.is_ascii_digit()) {
         let rest = san.trim_start_matches(|c: char| c.is_ascii_digit());
         if !rest.starts_with('.') {
