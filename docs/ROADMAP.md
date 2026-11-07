@@ -32,7 +32,20 @@ analyse with Stockfish, use the Lichess explorer, and later import from Chess.co
 4. **Linux build and CI** — GitHub Actions: tests on Windows and Linux on every push; Linux e2e approach to be decided (WebView2 debugging is Windows-only).
 5. **First release (v0.1.0)** — Windows installer and Linux packages, README with install guide, legal review of the EU database right and trademarks before the public release.
 6. **More online sources** — a Lichess player's games; Chess.com game import.
-7. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
+7. **Android version** — added 2026-11-07 at the user's request. Tauri 2 builds Android apps, so the
+   Rust core is reused; the work is a touch-friendly layout, Android's file picker (storage access
+   framework), and Stockfish packaged inside the app for each processor type instead of a path the
+   user types.
+   - **Occasional, non-intrusive ads** (the user's plan). To decide first, with the legal review:
+     ChessVault is GPL-3 and includes other people's GPL code (shakmaty, chessops, chessground), so a
+     closed-source ad SDK such as AdMob very likely can't be shipped with it. Options that fit the
+     licence: ads without a closed SDK (e.g. a simple banner loaded as web content), a paid Play
+     Store version, or donations. EU rules apply too: tracking ads need GDPR consent, and the Play
+     Store needs a data-safety entry.
+8. **iPhone version (maybe)** — after Android. Needs an Apple developer account (about €99 a year)
+   and a Mac to build. iOS doesn't allow starting other programs, so the engine must be built into
+   the app as a library.
+9. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
 
 ## Known issues
 
