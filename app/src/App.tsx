@@ -21,7 +21,8 @@ import {
   removeRecent,
   saveMyGames,
 } from "./recent";
-import { EMPTY_FILTER, Filter, SearchDialog, describeFilter, playerFilter } from "./Search";
+import { EMPTY_FILTER, Filter, describeFilter, playerFilter } from "./filter";
+import { SearchDialog } from "./Search";
 import {
   AddMode,
   GameTree,
