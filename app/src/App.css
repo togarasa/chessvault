@@ -47,8 +47,10 @@ body {
 }
 
 input,
+select,
 textarea {
   padding: 6px 8px;
+  font: inherit;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg);
@@ -129,7 +131,14 @@ tbody tr.active {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+/* Buttons keep their label on one line and move to the next row instead. */
+button {
+  white-space: nowrap;
 }
 
 .muted {
