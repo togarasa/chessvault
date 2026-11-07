@@ -1,49 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-
-type Score = { kind: "cp" | "mate"; value: number };
-type EngineLine = { fen: string; multipv: number; depth: number; score: Score; moves: string[] };
-
-const ENGINE_PATH_KEY = "chessvault.enginePath";
-
-function loadEnginePath() {
-  try {
-    return localStorage.getItem(ENGINE_PATH_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function saveEnginePath(path: string) {
-  try {
-    localStorage.setItem(ENGINE_PATH_KEY, path);
-  } catch {
-    // Without storage the path just isn't remembered.
-  }
-}
-
-/// A score from White's side: "+0.32", "-1.50", or "#3" / "#-2" for mate.
-function formatScore(score: Score) {
-  if (score.kind === "mate") return `#${score.value}`;
-  const pawns = score.value / 100;
-  return `${pawns > 0 ? "+" : ""}${pawns.toFixed(2)}`;
-}
-
-/// SAN moves with move numbers, starting from the position in `fen`.
-function numberMoves(fen: string, moves: string[]) {
-  const fields = fen.split(" ");
-  let whiteToMove = fields[1] !== "b";
-  let moveNumber = Number(fields[5]) || 1;
-  return moves
-    .map((san, i) => {
-      const label = whiteToMove ? `${moveNumber}. ${san}` : i === 0 ? `${moveNumber}... ${san}` : san;
-      if (!whiteToMove) moveNumber += 1;
-      whiteToMove = !whiteToMove;
-      return label;
-    })
-    .join(" ");
-}
+import { onEngineLine, startAnalysis, stopAnalysis } from "./api";
+import { EngineLine, formatScore, loadEnginePath, numberMoves, saveEnginePath, withLine } from "./engine";
 
 /// Runs a UCI engine on the board position and shows its best lines.
 export function EnginePanel({ fen }: { fen: string }) {
@@ -54,25 +11,20 @@ export function EnginePanel({ fen }: { fen: string }) {
   const currentFen = useRef(fen);
   currentFen.current = fen;
 
-  useEffect(() => {
-    const unlisten = listen<EngineLine>("engine-line", ({ payload }) => {
-      if (payload.fen !== currentFen.current) return;
-      setLines((current) => {
-        const next = [...current];
-        next[payload.multipv - 1] = payload;
-        return next;
-      });
-    });
-    return () => {
-      unlisten.then((stop) => stop());
-    };
-  }, []);
+  // Lines for an earlier position can still arrive after a move; only the current position's count.
+  useEffect(
+    () =>
+      onEngineLine((line) => {
+        if (line.fen === currentFen.current) setLines((current) => withLine(current, line));
+      }),
+    [],
+  );
 
   // While running, follow the board to each new position.
   useEffect(() => {
     setLines([]);
     if (!running) return;
-    invoke("start_analysis", { enginePath, fen }).catch((e) => {
+    startAnalysis(enginePath, fen).catch((e) => {
       setError(String(e));
       setRunning(false);
     });
@@ -81,7 +33,7 @@ export function EnginePanel({ fen }: { fen: string }) {
   // Stop the engine when the panel closes.
   useEffect(
     () => () => {
-      invoke("stop_analysis").catch(() => {});
+      stopAnalysis().catch(() => {});
     },
     [],
   );
@@ -90,7 +42,7 @@ export function EnginePanel({ fen }: { fen: string }) {
     setError("");
     if (running) {
       setRunning(false);
-      await invoke("stop_analysis").catch((e) => setError(String(e)));
+      await stopAnalysis().catch((e) => setError(String(e)));
     } else {
       saveEnginePath(enginePath);
       setRunning(true);

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { RecentFile, fileName } from "./recent";
+import { RecentFile, fileName, folderOf } from "./recent";
 
 type Props = {
   /// Recently opened files, newest first.
@@ -14,8 +14,9 @@ type Props = {
   onMenu: (path: string, isMyGames: boolean, x: number, y: number) => void;
 };
 
+/// The folder of a file, without the trailing separator.
 function folderName(path: string) {
-  return path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")));
+  return folderOf(path).slice(0, -1);
 }
 
 function countText(count: number | null | undefined) {

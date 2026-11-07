@@ -65,3 +65,8 @@ export function saveMyGames(path: string | null) {
     // Without storage My Games has to be chosen again next time.
   }
 }
+
+/// The folder part of a path, ending in its separator, or "" when there is none.
+export function folderOf(path: string) {
+  return path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
+}

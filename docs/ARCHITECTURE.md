@@ -51,15 +51,15 @@ translate errors into messages; they contain no chess or database logic.
 
 ### `app/src` — desktop user interface (React)
 
-*Being introduced by the `App.tsx` refactor (roadmap step 1); until then `App.tsx` still mixes these layers.*
-
 | Layer | Files | Rule |
 |---|---|---|
-| Logic | `tree.ts` (game tree on chessops), `filter.ts`, `recent.ts` | No React, no Tauri. Unit-tested with Vitest. |
-| Backend access | `api.ts` | The only file that calls Tauri commands (`invoke`). |
-| Components | `*.tsx` | Show state and call logic or `api.ts`. |
+| Logic | `tree.ts` (game tree on chessops), `filter.ts` (searches), `columns.ts` (game list columns and sorting), `pgn.ts` (new games, header values), `engine.ts` (engine lines and scores), `recent.ts` (recent files, My Games, paths), `types.ts` (data shared with the backend) | No React, no Tauri, no screens, no hooks, no `api.ts`. Unit-tested with Vitest. |
+| Backend access | `api.ts` | The only file that uses Tauri: commands, engine events, file windows, show in folder. May use logic types only. |
+| State (hooks) | `useDialogs.ts` (questions and menus), `useGameList.ts` (list, sorting, search, loading more), `useGameEditor.ts` (the game on the board and its editing), `useFileCounts.ts` (game counts for the tiles) | Hold state and call logic and `api.ts`; render nothing (they may use `Dialog.tsx`'s types). |
+| Screens (components) | `App.tsx` (ties the parts together and runs the file operations), `Toolbar`, `SearchBar`, `GameList`, `GameView`, `DatabaseTiles`, `Board`, `Notation`, `EnginePanel`, `ExplorerPanel`, `Search` (search window), `Dialog` (questions and menus) | Show state and pass the user's actions on. |
 
-These rules are checked by dependency-cruiser (`pnpm test:arch`).
+dependency-cruiser checks these rules, plus no circular imports and no unused modules
+(`pnpm test:arch`, configured in `app/.dependency-cruiser.cjs`).
 
 ## Data
 

@@ -53,3 +53,8 @@ export function describeFilter(f: Filter): string {
   if (f.site) parts.push(`site "${f.site}"`);
   return parts.join(" · ") || "all games";
 }
+
+/// Whether a filter has nothing set, so it matches every game.
+export function isEmptyFilter(f: Filter): boolean {
+  return describeFilter(f) === "all games";
+}

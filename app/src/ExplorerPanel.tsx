@@ -1,24 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-
-type Database = "masters" | "lichess";
-
-type ExplorerMove = {
-  uci: string;
-  san: string;
-  white: number;
-  draws: number;
-  black: number;
-  averageRating: number | null;
-};
-
-type Explorer = {
-  white: number;
-  draws: number;
-  black: number;
-  moves: ExplorerMove[];
-  opening: { eco: string; name: string } | null;
-};
+import { Explorer, ExplorerDatabase, explore, hasLichessToken, setLichessToken } from "./api";
 
 /// White wins, draws and Black wins as a bar of three segments.
 function ResultBar({ white, draws, black }: { white: number; draws: number; black: number }) {
@@ -41,7 +22,7 @@ function ResultBar({ white, draws, black }: { white: number; draws: number; blac
 
 /// Lichess opening explorer statistics for the board position. Clicking a move plays it.
 export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: string) => void }) {
-  const [database, setDatabase] = useState<Database>("masters");
+  const [database, setDatabase] = useState<ExplorerDatabase>("masters");
   const [data, setData] = useState<Explorer | null>(null);
   const [error, setError] = useState("");
   const [hasToken, setHasToken] = useState<boolean | null>(null);
@@ -50,7 +31,7 @@ export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: stri
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
-    invoke<boolean>("has_lichess_token")
+    hasLichessToken()
       .then(setHasToken)
       .catch(() => setHasToken(false));
   }, []);
@@ -60,7 +41,7 @@ export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: stri
     if (!hasToken) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      invoke<Explorer>("explore", { database, fen })
+      explore(database, fen)
         .then((result) => {
           if (cancelled) return;
           setData(result);
@@ -80,7 +61,7 @@ export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: stri
 
   async function saveToken() {
     try {
-      await invoke("set_lichess_token", { token: tokenInput });
+      await setLichessToken(tokenInput);
       setHasToken(tokenInput.trim() !== "");
       setTokenInput("");
       setEditingToken(false);
@@ -96,7 +77,7 @@ export function ExplorerPanel({ fen, onPlay }: { fen: string; onPlay: (uci: stri
     <div className="panel">
       <div className="panel-head">
         <strong>Lichess explorer</strong>
-        <select value={database} onChange={(e) => setDatabase(e.currentTarget.value as Database)}>
+        <select value={database} onChange={(e) => setDatabase(e.currentTarget.value as ExplorerDatabase)}>
           <option value="masters">Masters</option>
           <option value="lichess">Lichess games</option>
         </select>
