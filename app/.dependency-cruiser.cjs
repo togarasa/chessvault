@@ -2,7 +2,7 @@
 // Run with `pnpm test:arch`.
 
 /// The logic layer: plain TypeScript, no React, no Tauri, no screen code.
-const LOGIC = "^src/(tree|filter|recent|engine|columns|pgn|types)\\.ts$";
+const LOGIC = "^src/(tree|filter|recent|engine|columns|pgn|conversion|types)\\.ts$";
 
 module.exports = {
   forbidden: [

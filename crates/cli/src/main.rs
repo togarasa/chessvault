@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use chessvault_core::convert::convert_to_pgn;
 use chessvault_core::db::{GameSummary, Order, Store};
+use chessvault_core::library::convert_chessbase;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -19,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Convert a ChessBase database to PGN.
+    /// Convert a .cbh database to PGN.
     Convert {
         /// Database path, with or without the .cbh extension.
         database: PathBuf,
@@ -29,6 +30,14 @@ enum Command {
         /// Worker threads (0 or 1 runs on one thread).
         #[arg(long, default_value_t = 4)]
         threads: usize,
+    },
+    /// Convert a .cbh database or .cbv archive into a new ChessVault database.
+    ConvertToDatabase {
+        /// The .cbh or .cbv file.
+        source: PathBuf,
+        /// The database to create.
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Import the games in a PGN file into the database.
     Import {
@@ -85,6 +94,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let stats = convert_to_pgn(&database, &mut out, threads)?;
             out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
             eprintln!("wrote {} games to {} ({} failures)", stats.games, output.display(), stats.failures);
+        }
+        Command::ConvertToDatabase { source, output } => {
+            let converted = convert_chessbase(&source, &output, &mut |progress| {
+                eprint!("\r{} of {} records", progress.done, progress.total);
+                true
+            })?;
+            eprintln!();
+            println!("converted {} games to {} ({} left out)", converted.games, output.display(), converted.skipped);
         }
         Command::Import { pgn } => {
             let mut store = Store::open(&db)?;

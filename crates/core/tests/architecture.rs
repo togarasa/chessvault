@@ -129,6 +129,11 @@ fn adapters_do_not_use_each_other() {
 }
 
 #[test]
+fn the_library_only_combines_the_store_and_the_reader() {
+    assert_module_avoids("library.rs", &["crate::engine", "crate::online", "rusqlite", "reqwest", "cbvault", "std::process"]);
+}
+
+#[test]
 fn every_core_module_is_covered_by_these_rules() {
     // A new module needs a rule above; this test fails until it has one.
     let mut modules: Vec<String> = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
@@ -140,6 +145,6 @@ fn every_core_module_is_covered_by_these_rules() {
         })
         .collect();
     modules.sort();
-    assert_eq!(modules, ["convert", "db", "engine", "online", "validate"]);
+    assert_eq!(modules, ["convert", "db", "engine", "library", "online", "validate"]);
     assert_eq!(module_source("online/mod.rs").trim_start().lines().filter(|l| l.starts_with("pub mod")).count(), 1);
 }

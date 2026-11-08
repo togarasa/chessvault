@@ -8,6 +8,7 @@ each step; click a video link to play it.
 The games in the pictures are made-up examples.
 
 - [Start screen and databases](#start-screen-and-databases)
+- [Opening ChessBase databases](#opening-chessbase-databases)
 - [The game list](#the-game-list)
 - [Replaying a game](#replaying-a-game)
 - [Entering moves and variations](#entering-moves-and-variations)
@@ -31,7 +32,8 @@ folder and when you last opened it.
 - **Double-click a tile** to open it (or click it once and press Enter).
 - **My Games** is always first: a database for your own games. The first time you double-click
   it, ChessVault asks where to keep it.
-- **Add database…** opens a PGN file (`.pgn`) or a ChessVault database (`.sqlite`) from any folder.
+- **Add database…** opens a PGN file (`.pgn`), a ChessVault database (`.sqlite`) or a ChessBase
+  database (`.cbh` or `.cbv`) from any folder.
   **Open…** in the toolbar does the same, and **Recent ▾** lists the last files you opened.
 - **Right-click a tile** to open it, show it in its folder, or remove it from the list. Removing
   only takes it off the list; the file stays on your disk.
@@ -39,6 +41,29 @@ folder and when you last opened it.
 - **Databases** in the toolbar brings you back to this screen from an open database.
 
 ▶ [Video: open a database and browse a game](videos/open-and-browse.webm)
+
+## Opening ChessBase databases
+
+ChessVault opens ChessBase databases (`.cbh`) and archives (`.cbv`) like any other file: choose them
+with **Add database…** or **Open…**. The first time, it copies the games into a ChessVault database
+in the same folder, named after the file (`Club.cbh` gets `Club.cbh.sqlite`):
+
+![Converting a database, with its progress](images/conversion.png)
+
+- **Your ChessBase files are never changed.** Edits and new games go into the ChessVault database.
+- This happens once; afterwards the file opens straight away, even if you later move or delete the
+  original. **Cancel** stops it and leaves nothing behind, and you can start again later. While an
+  archive is unpacked or the database is finishing, stopping has to wait until that step is done.
+- A very large database takes a while and makes a large file: about 6 minutes and 5.8 GB for 6.4
+  million games. ChessVault tells you before it starts. If the folder is synced to a cloud service
+  such as OneDrive, that file is uploaded too, so you may want to copy the database to another
+  folder first. An archive also needs room for its unpacked files during the conversion.
+- A damaged game is left out, and so are games with a null move (`--`) or a Chess960 start, which
+  ChessVault can't show yet. The status bar says how many were left out whenever you open the file:
+  in a test with 6.4 million games that was 563.
+- Games you add in ChessBase later don't appear by themselves. To bring them in, delete the
+  `.cbh.sqlite` file and open the database again; this also throws away changes made in ChessVault.
+- ChessVault can't open password-protected archives or the newer `.2cbh` databases.
 
 ## The game list
 
@@ -49,7 +74,8 @@ number of moves, the ECO opening code, event, site, round and date.
 
 - **Click a column header** to sort by it, and click it again to reverse the order. Games without
   a value, such as an unrated player, are always listed last.
-- **Scroll down** to load more games; large databases load 200 games at a time.
+- **Scroll down** to load more games; large databases load 200 games at a time. In a database of
+  millions of games, sorting by a column other than the number and searching take a long time.
 - **Right-click a game** to open or delete it.
 
 ## Replaying a game
@@ -195,12 +221,17 @@ games ended: White wins, draws and Black wins as a bar, with the average rating.
   again uses the same database, even if you deleted all its games. The PGN file only changes when
   you choose it under **Save as new game → An existing PGN file…**, which adds the game at its end.
 - **ChessVault databases** (`.sqlite`) are single files you can copy or back up like any other.
-- ChessVault never writes to ChessBase files.
+- **ChessBase databases and archives** get a ChessVault database next to them too, named after
+  the whole file (`Club.cbh.sqlite`). ChessVault never writes to ChessBase files.
 
 ## Problems
 
-- **"is not a ChessVault database"** – the file is not a database ChessVault made. Open PGN files
-  through **Open…**; to use a ChessBase database, export it to PGN in ChessBase first.
+- **"is not a ChessVault database"** – the file is not a database ChessVault made, or a kind of file
+  ChessVault can't read, such as a `.2cbh` database.
+- **"could not read …"** – a ChessBase database is damaged or some of its files are missing. Keep all
+  files of the database together in one folder.
+- **"could not make a database beside …"** – ChessVault can't write in that folder. Copy the
+  database's files to a folder of your own and open them there.
 - **A recent file can't be opened** – it was moved or deleted. ChessVault offers to take it off
   the list; it never creates an empty database in its place. If My Games was moved, right-click it
   and choose **Choose another My Games database…**.

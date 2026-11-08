@@ -12,5 +12,6 @@ repository = "https://github.com/togarasa/chessvault"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Not `panic = "abort"`: the ChessBase reader can panic on a damaged game, and that must lose the
+# game, not close the app.
 strip = true

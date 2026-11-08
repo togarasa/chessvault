@@ -3,11 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import App from "./App";
-import { GameSummary } from "./types";
+import { ConversionProgress, GameSummary, OpenResult } from "./types";
 
 vi.mock("./api", async (original) => ({
   ...(await original<typeof import("./api")>()),
   openDatabase: vi.fn(),
+  cancelConversion: vi.fn(),
+  gamesToConvert: vi.fn(),
+  onConversionProgress: vi.fn(),
   createDatabase: vi.fn(),
   onCloseRequested: vi.fn(),
   closeWindow: vi.fn(),
@@ -58,6 +61,7 @@ const GAMES = [summary(1, "Alpha, Anna", "Beta, Bernd"), summary(2, "Gamma, Gerd
 const pgnOf = (white: string) => `[Event "Club"]\n[Date "2026.01.01"]\n[White "${white}"]\n[Black "Beta, Bernd"]\n[Result "1-0"]\n\n1. e4 e5 1-0`;
 
 let closeRequested: () => void = () => {};
+let conversionProgress: (progress: ConversionProgress) => void = () => {};
 const status = () => document.querySelector(".status")!.textContent;
 const dialog = () => within(document.querySelector(".dialog") as HTMLElement);
 const button = (name: string) => screen.getByRole("button", { name });
@@ -67,8 +71,13 @@ beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
   vi.mocked(api.databaseCounts).mockImplementation(async (paths) => paths.map(() => 2));
-  vi.mocked(api.openDatabase).mockResolvedValue({ database: "C:\\games\\club.sqlite", games: 2, imported: 0 });
-  vi.mocked(api.createDatabase).mockResolvedValue({ database: "D:\\My Games.sqlite", games: 0, imported: 0 });
+  vi.mocked(api.openDatabase).mockResolvedValue({ database: "C:\\games\\club.sqlite", games: 2, imported: 0, skipped: 0 });
+  vi.mocked(api.createDatabase).mockResolvedValue({ database: "D:\\My Games.sqlite", games: 0, imported: 0, skipped: 0 });
+  vi.mocked(api.gamesToConvert).mockResolvedValue(null);
+  vi.mocked(api.onConversionProgress).mockImplementation((onProgress) => {
+    conversionProgress = onProgress;
+    return () => {};
+  });
   vi.mocked(api.onCloseRequested).mockImplementation((onClose) => {
     closeRequested = onClose;
     return () => {};
@@ -100,6 +109,125 @@ async function openGame(white: string) {
   await screen.findByText("1. e4");
 }
 
+describe("converting a file", () => {
+  /// Starts opening `club.cbh`; the returned functions end the opening.
+  async function startOpening() {
+    let finish: (result: OpenResult) => void = () => {};
+    let fail: (error: string) => void = () => {};
+    vi.mocked(api.openDatabase).mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      }),
+    );
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\club.cbh");
+    await userEvent.click(button("Open…"));
+    await waitFor(() => expect(api.openDatabase).toHaveBeenCalled());
+    return { finish, fail };
+  }
+
+  it("shows its progress, then the games, and says when games were left out", async () => {
+    render(<App />);
+    const { finish } = await startOpening();
+    expect(screen.queryByRole("dialog", { name: "Converting" })).toBeNull();
+
+    act(() => conversionProgress({ done: 50000, total: 100000 }));
+    const dialog = screen.getByRole("dialog", { name: "Converting" });
+    expect(dialog.textContent).toContain("50%");
+
+    // Pressing Enter on the tile behind the window doesn't start a second conversion.
+    await userEvent.click(button("Open…"));
+    expect(api.openDatabase).toHaveBeenCalledOnce();
+
+    await act(async () => finish({ database: "C:\\games\\club.cbh.sqlite", games: 2, imported: 2, skipped: 3 }));
+    expect(await screen.findByText("Gamma, Gerd")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Converting" })).toBeNull();
+    expect(status()).toBe("Imported 2 games into C:\\games\\club.cbh.sqlite. 3 games were left out: damaged, or with null moves or Chess960.");
+
+    // A late event doesn't bring the window back.
+    act(() => conversionProgress({ done: 100000, total: 100000 }));
+    expect(screen.queryByRole("dialog", { name: "Converting" })).toBeNull();
+  });
+
+  it("still says what was left out when the file is opened again", async () => {
+    render(<App />);
+    vi.mocked(api.openDatabase).mockResolvedValueOnce({ database: "C:\\games\\club.cbh.sqlite", games: 2, imported: 0, skipped: 3 });
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\club.cbh");
+    await userEvent.click(button("Open…"));
+    await screen.findByText("Gamma, Gerd");
+    expect(status()).toBe("Opened C:\\games\\club.cbh.sqlite (2 games). 3 games were left out: damaged, or with null moves or Chess960.");
+  });
+
+  it("can be cancelled, which isn't reported as a failure to open the file", async () => {
+    localStorage.setItem("chessvault.recent", JSON.stringify([{ path: "C:\\games\\club.cbh", openedAt: 1 }]));
+    render(<App />);
+    const { fail } = await startOpening();
+    act(() => conversionProgress({ done: 1, total: 100 }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Converting" })).getByRole("button", { name: "Cancel" }));
+    expect(api.cancelConversion).toHaveBeenCalledOnce();
+    expect((button("Stopping…") as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => fail(api.CANCELLED));
+    expect(screen.queryByRole("dialog", { name: "Converting" })).toBeNull();
+    expect(status()).toBe("Stopped converting club.cbh.");
+    // The file stays on the list, with no question about removing it.
+    expect(screen.queryByText("Remove from recent files")).toBeNull();
+    expect(screen.getByText("club.cbh")).toBeTruthy();
+    expect(screen.getByText("Databases", { selector: "h2" })).toBeTruthy();
+  });
+
+  it("is stopped first when the window is closed, and the window closes after", async () => {
+    render(<App />);
+    const { fail } = await startOpening();
+    act(() => conversionProgress({ done: 1, total: 100 }));
+    act(() => closeRequested());
+    await waitFor(() => expect(api.cancelConversion).toHaveBeenCalledOnce());
+    expect(api.closeWindow).not.toHaveBeenCalled();
+    expect((button("Stopping…") as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => fail(api.CANCELLED));
+    await waitFor(() => expect(api.closeWindow).toHaveBeenCalledOnce());
+  });
+
+  it("closes the window when the conversion had just finished", async () => {
+    render(<App />);
+    const { finish } = await startOpening();
+    act(() => closeRequested());
+    await act(async () => finish({ database: "C:\\games\\club.cbh.sqlite", games: 2, imported: 2, skipped: 0 }));
+    await waitFor(() => expect(api.closeWindow).toHaveBeenCalledOnce());
+  });
+
+  it("asks first when the conversion would be large, and only then", async () => {
+    render(<App />);
+    vi.mocked(api.gamesToConvert).mockResolvedValue(6_000_000);
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\big.cbh");
+    await userEvent.click(button("Open…"));
+    expect((await screen.findByText(/makes a new file of about 5\.4 GB/)).textContent).toContain("about 6 minutes");
+    await userEvent.click(button("Cancel"));
+    expect(api.openDatabase).not.toHaveBeenCalled();
+
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\big.cbh");
+    await userEvent.click(button("Open…"));
+    await userEvent.click(await screen.findByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(api.openDatabase).toHaveBeenCalledWith("C:\\games\\big.cbh"));
+
+    vi.mocked(api.gamesToConvert).mockResolvedValue(10);
+    vi.mocked(api.openDatabase).mockClear();
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\small.cbh");
+    await userEvent.click(button("Open…"));
+    await waitFor(() => expect(api.openDatabase).toHaveBeenCalledWith("C:\\games\\small.cbh"));
+    expect(screen.queryByRole("button", { name: "Convert" })).toBeNull();
+  });
+
+  it("offers every kind of game file in the Open window", async () => {
+    render(<App />);
+    vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce(null);
+    await userEvent.click(button("Open…"));
+    const kinds = vi.mocked(api.chooseFileToOpen).mock.calls[0][1];
+    expect(kinds[0].extensions).toEqual(["pgn", "sqlite", "cbh", "cbv"]);
+    expect(kinds.map((kind) => kind.name).join(" ")).not.toMatch(/chessbase/i);
+  });
+});
+
 describe("opening files", () => {
   it("starts on the database tiles and opens a file chosen in the Open window", async () => {
     render(<App />);
@@ -110,7 +238,7 @@ describe("opening files", () => {
     await userEvent.click(button("Open…"));
     expect(api.openDatabase).not.toHaveBeenCalled();
 
-    vi.mocked(api.openDatabase).mockResolvedValueOnce({ database: "C:\\games\\club.sqlite", games: 2, imported: 2 });
+    vi.mocked(api.openDatabase).mockResolvedValueOnce({ database: "C:\\games\\club.sqlite", games: 2, imported: 2, skipped: 0 });
     vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce(CLUB);
     await userEvent.click(button("Open…"));
     expect(await screen.findByText("Gamma, Gerd")).toBeTruthy();

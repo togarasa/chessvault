@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { ConversionDialog } from "./ConversionDialog";
 import { DatabaseTiles } from "./DatabaseTiles";
 import { Ask, ContextMenu, Dialog } from "./Dialog";
 import { EMPTY_FILTER, playerFilter } from "./filter";
@@ -15,6 +16,34 @@ import { GameSummary } from "./types";
 function ask(extra: Partial<Ask>): Ask {
   return { title: "Question?", answer: vi.fn(), ...extra };
 }
+
+describe("ConversionDialog", () => {
+  const bar = () => document.querySelector("progress") as HTMLProgressElement;
+
+  it("shows how far it is, then that it is finishing", () => {
+    const { rerender } = render(<ConversionDialog progress={{ done: 2, total: 8 }} cancelling={false} onCancel={() => {}} />);
+    expect(screen.getByText("25%")).toBeTruthy();
+    expect(bar().getAttribute("value")).toBe("2");
+    expect(bar().getAttribute("max")).toBe("8");
+    rerender(<ConversionDialog progress={{ done: 8, total: 8 }} cancelling={false} onCancel={() => {}} />);
+    expect(screen.getByText("Finishing the database…")).toBeTruthy();
+  });
+
+  it("shows a moving bar while an archive is unpacked", () => {
+    render(<ConversionDialog progress={{ done: 0, total: 0 }} cancelling={false} onCancel={() => {}} />);
+    expect(screen.getByText("Unpacking the archive…")).toBeTruthy();
+    expect(bar().hasAttribute("value")).toBe(false);
+  });
+
+  it("cancels once", async () => {
+    const onCancel = vi.fn();
+    const { rerender } = render(<ConversionDialog progress={{ done: 2, total: 8 }} cancelling={false} onCancel={onCancel} />);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    rerender(<ConversionDialog progress={{ done: 2, total: 8 }} cancelling={true} onCancel={onCancel} />);
+    expect((screen.getByRole("button", { name: "Stopping…" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
 
 describe("Dialog", () => {
   it("offers choices and a cancel button, focusing the first choice", async () => {

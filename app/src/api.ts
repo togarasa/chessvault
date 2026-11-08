@@ -7,13 +7,25 @@ import { open as openFileWindow, save as saveFileWindow } from "@tauri-apps/plug
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { EngineLine } from "./engine";
 import { Filter } from "./filter";
-import { Explorer, ExplorerDatabase, Game, GameSummary, OpenResult, Order } from "./types";
+import { ConversionProgress, Explorer, ExplorerDatabase, Game, GameSummary, OpenResult, Order } from "./types";
 
 // Databases and games.
 
 /// Opens an existing database or PGN file; a missing file is an error.
 export const openDatabase = (path: string) => invoke<OpenResult>("open_database", { path });
 /// Creates an empty database, or opens it when it already exists.
+export const gamesToConvert = (path: string) => invoke<number | null>("games_to_convert", { path });
+export const cancelConversion = () => invoke<void>("cancel_conversion");
+
+/// The text `openDatabase` fails with after `cancelConversion`.
+export const CANCELLED = "cancelled";
+
+/// Calls `onProgress` while a file is converted; returns a function that stops listening.
+export function onConversionProgress(onProgress: (progress: ConversionProgress) => void): () => void {
+  const unlisten = listen<ConversionProgress>("conversion-progress", ({ payload }) => onProgress(payload));
+  return () => void unlisten.then((stop) => stop());
+}
+
 export const createDatabase = (path: string) => invoke<OpenResult>("create_database", { path });
 export const importPgn = (path: string) => invoke<number>("import_pgn", { path });
 export const listGames = (order: Order, limit: number, offset: number) =>
@@ -60,6 +72,8 @@ export type FileKind = { name: string; extensions: string[] };
 export const PGN_FILES: FileKind = { name: "PGN files", extensions: ["pgn"] };
 export const DATABASE_FILES: FileKind = { name: "ChessVault databases", extensions: ["sqlite"] };
 export const GAME_FILES: FileKind = { name: "PGN files and ChessVault databases", extensions: ["pgn", "sqlite"] };
+export const CBH_FILES: FileKind = { name: "CBH databases and CBV archives", extensions: ["cbh", "cbv"] };
+export const OPENABLE_FILES: FileKind = { name: "All game files", extensions: [...GAME_FILES.extensions, ...CBH_FILES.extensions] };
 
 /// Asks for an existing file; null when cancelled.
 export async function chooseFileToOpen(title: string, kinds: FileKind[], folder = ""): Promise<string | null> {

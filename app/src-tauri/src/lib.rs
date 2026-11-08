@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use chessvault_core::db::{self, Filter, Game, GameSummary, Order, Store};
 use chessvault_core::engine::{Engine, EngineLine};
+use chessvault_core::library;
 use chessvault_core::online::lichess::{self, Database, Explorer};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -14,6 +16,8 @@ struct AppState {
     /// The running engine and the path it was started from.
     engine: Mutex<Option<(PathBuf, Engine)>>,
     lichess: lichess::Client,
+    /// Set to stop the conversion that is running.
+    cancel_conversion: AtomicBool,
 }
 
 /// Runs `f` against the open database, or fails if none is open.
@@ -32,6 +36,7 @@ struct OpenResult {
     database: String,
     games: i64,
     imported: usize,
+    skipped: usize,
 }
 
 /// Makes `opened` the open database.
@@ -39,17 +44,34 @@ fn use_database(opened: db::Opened, state: &State<'_, AppState>) -> Result<OpenR
     let games = opened.store.count().map_err(|e| e.to_string())?;
     let database = opened.path.display().to_string();
     *state.store.lock().map_err(|e| e.to_string())? = Some(opened.store);
-    Ok(OpenResult { database, games, imported: opened.imported })
+    Ok(OpenResult { database, games, imported: opened.imported, skipped: opened.skipped })
 }
 
 // Commands that touch files or the database are `async`, so Tauri runs them off the window's
 // thread and a large import or export doesn't freeze the window.
 
-/// Opens a database, or a PGN file through a database beside it. A missing file is an error.
+/// Opens a database, or another game file through a database beside it. A missing file is an
+/// error. Converting a file sends `conversion-progress` events until it ends or is cancelled.
 #[tauri::command(async)]
-fn open_database(path: String, state: State<'_, AppState>) -> Result<OpenResult, String> {
-    let opened = db::open_path(Path::new(&path)).map_err(|e| e.to_string())?;
+fn open_database(path: String, app: AppHandle, state: State<'_, AppState>) -> Result<OpenResult, String> {
+    state.cancel_conversion.store(false, Ordering::Relaxed);
+    let opened = library::open_path(Path::new(&path), &mut |progress| {
+        let _ = app.emit("conversion-progress", progress);
+        !state.cancel_conversion.load(Ordering::Relaxed)
+    })
+    .map_err(|e| e.to_string())?;
     use_database(opened, &state)
+}
+
+/// How many games opening `path` would convert; null when it converts nothing or can't be told.
+#[tauri::command(async)]
+fn games_to_convert(path: String) -> Option<i64> {
+    library::games_to_convert(Path::new(&path)).ok().flatten()
+}
+
+#[tauri::command]
+fn cancel_conversion(state: State<'_, AppState>) {
+    state.cancel_conversion.store(true, Ordering::Relaxed);
 }
 
 /// Creates an empty database (or opens it if it exists) and makes it the open one.
@@ -106,7 +128,7 @@ fn delete_game(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
 /// missing or can't be read. Nothing is created or changed.
 #[tauri::command(async)]
 fn database_counts(paths: Vec<String>) -> Vec<Option<i64>> {
-    paths.iter().map(|p| db::game_count(Path::new(p)).ok().flatten()).collect()
+    paths.iter().map(|p| library::game_count(Path::new(p)).ok().flatten()).collect()
 }
 
 /// Adds a game to another database or PGN file, creating it if needed; with `replace`, a new
@@ -205,6 +227,8 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             open_database,
+            cancel_conversion,
+            games_to_convert,
             create_database,
             import_pgn,
             list_games,

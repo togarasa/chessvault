@@ -1,9 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COLUMNS, DEFAULT_ORDER, nextOrder } from "./columns";
+import { conversionStepText, largeConversionQuestion } from "./conversion";
 import { EngineLine, formatScore, loadEnginePath, numberMoves, saveEnginePath, withLine } from "./engine";
 import { formValue, headerValue, newGamePgn, pgnDate } from "./pgn";
 import { folderOf } from "./recent";
 import { GameSummary } from "./types";
+
+describe("large conversions", () => {
+  it("are asked about from 200,000 games on", () => {
+    expect(largeConversionQuestion(0)).toBeNull();
+    expect(largeConversionQuestion(199_999)).toBeNull();
+    const question = largeConversionQuestion(200_000)!;
+    expect(question).toContain("about 1 minute and");
+    expect(question).toContain("about 0.2 GB");
+    expect(largeConversionQuestion(6_464_659)).toContain("about 6 minutes");
+    expect(largeConversionQuestion(6_464_659)).toContain("about 5.8 GB");
+  });
+
+  it("say what they are doing", () => {
+    expect(conversionStepText({ done: 0, total: 0 })).toContain("Unpacking");
+    expect(conversionStepText({ done: 0, total: 5 })).toBe("0%");
+    expect(conversionStepText({ done: 4, total: 5 })).toBe("80%");
+    expect(conversionStepText({ done: 5, total: 5 })).toContain("Finishing");
+  });
+});
 
 describe("game list columns", () => {
   const game: GameSummary = {

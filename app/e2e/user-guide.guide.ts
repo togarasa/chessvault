@@ -4,7 +4,7 @@
 // action, with a chapter title for each step.
 import { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "./app";
 
@@ -99,6 +99,19 @@ test("start screen, game list and a game", async ({ chessvault: { page, pgn } })
   await expect(page.locator(".dialog")).toContainText("c4 is a new move here.");
   await shot(page, "variation-prompt");
   await page.keyboard.press("Escape");
+});
+
+test("opening a .cbh database", async ({ chessvault: { page, dir } }) => {
+  const fixtures = resolve(import.meta.dirname, "../../crates/core/tests/fixtures/chessbase");
+  for (const file of readdirSync(fixtures).filter((name) => name.startsWith("club."))) {
+    copyFileSync(resolve(fixtures, file), resolve(dir, file));
+  }
+  await seedRecent(page, resolve(dir, "club.cbh"));
+  await page.locator(".tile").nth(1).dblclick();
+  // The debug build the guide is recorded with starts slowly, so the window stays long enough.
+  await expect(page.getByRole("dialog", { name: "Converting" })).toBeVisible();
+  await shot(page, "conversion");
+  await expect(page.locator(".games tbody tr")).toHaveCount(2, { timeout: 60_000 });
 });
 
 test("search window and results", async ({ chessvault: { page, pgn, openFile } }) => {

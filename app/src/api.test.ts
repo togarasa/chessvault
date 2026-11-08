@@ -64,6 +64,8 @@ describe("api.ts calls the backend's real commands", () => {
   const order = { column: "id", descending: false } as const;
   const everyCall: [string, () => Promise<unknown>][] = [
     ["open_database", () => api.openDatabase("a.pgn")],
+    ["cancel_conversion", () => api.cancelConversion()],
+    ["games_to_convert", () => api.gamesToConvert("a.cbh")],
     ["create_database", () => api.createDatabase("a.sqlite")],
     ["import_pgn", () => api.importPgn("a.pgn")],
     ["list_games", () => api.listGames(order, 10, 0)],
@@ -102,6 +104,17 @@ describe("api.ts calls the backend's real commands", () => {
     expect(calls[0].args).toEqual({ id: 7 });
     await api.exportPgn("out.pgn", [3, 4]);
     expect(calls[1].args).toEqual({ path: "out.pgn", ids: [3, 4] });
+  });
+});
+
+describe("conversion progress", () => {
+  it("is passed on until listening stops", async () => {
+    const seen: unknown[] = [];
+    const stop = api.onConversionProgress((progress) => seen.push(progress));
+    listeners[listeners.length - 1]({ payload: { done: 1, total: 2 } });
+    expect(seen).toEqual([{ done: 1, total: 2 }]);
+    stop();
+    await vi.waitFor(() => expect(stopListening).toHaveBeenCalledOnce());
   });
 });
 

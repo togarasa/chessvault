@@ -1,9 +1,19 @@
 import { Page } from "@playwright/test";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { expect, playMove, test, tile } from "./app";
 
 const dialog = (page: Page) => page.locator(".dialog");
+
+/// The made-up database and archive from the Rust tests, reused here.
+const CBH_FIXTURES = resolve(import.meta.dirname, "../../crates/core/tests/fixtures/chessbase");
+
+/// Copies the made-up database and archive into `dir`.
+function copyCbhFixtures(dir: string) {
+  for (const file of readdirSync(CBH_FIXTURES).filter((name) => name.startsWith("club."))) {
+    copyFileSync(join(CBH_FIXTURES, file), join(dir, file));
+  }
+}
 
 /// Puts files in the recent list (newest first) and, optionally, sets My Games, then reloads.
 async function seed(page: Page, recent: string[], myGames?: string) {
@@ -36,6 +46,36 @@ test("the start screen shows files as tiles with their game counts", async ({ ch
   await tile(page, "sample.pgn").dblclick();
   await expect(page.locator(".games tbody tr")).toHaveCount(3);
 });
+
+for (const file of ["club.cbh", "club.cbv"]) {
+  test(`${file} opens through a database beside it and stays unchanged`, async ({ chessvault: { page, dir, openFile } }) => {
+    copyCbhFixtures(dir);
+    const source = join(dir, file);
+    const before = readFileSync(source);
+
+    await openFile(source);
+    await expect(page.locator(".status")).toContainText("Imported 2 games");
+    await expect(page.locator(".games tbody tr")).toHaveCount(2);
+    expect(existsSync(`${source}.sqlite`)).toBe(true);
+
+    // The game plays through like any other, and edits go into the database.
+    await page.locator(".games tbody tr").filter({ hasText: "Alpha, Anna" }).click();
+    await expect(page.locator(".notation")).toContainText("A good start");
+    await page.keyboard.press("End");
+    await playMove(page, "a2a3");
+    await expect(page.getByText("Unsaved changes")).toBeVisible();
+    await page.locator(".actions").getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.locator(".status")).toContainText("Saved game 1");
+    expect(readFileSync(source).equals(before)).toBe(true);
+
+    // Opening it again doesn't convert again.
+    await page.getByRole("button", { name: "Databases" }).click();
+    await expect(tile(page, file)).toContainText("2 games");
+    await tile(page, file).dblclick();
+    await expect(page.locator(".status")).toContainText("Opened");
+    await expect(page.locator(".games tbody tr")).toHaveCount(2);
+  });
+}
 
 test("the Databases button goes back to the tiles, with fresh counts", async ({ chessvault: { page, pgn, openFile } }) => {
   await openFile(pgn);

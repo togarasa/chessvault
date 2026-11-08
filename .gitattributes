@@ -6,3 +6,6 @@
 *.ico binary
 *.icns binary
 *.sqlite binary
+
+# Made-up test databases.
+crates/core/tests/fixtures/chessbase/club.* binary

@@ -421,7 +421,12 @@ tr.playable {
   flex-direction: column;
   gap: 10px;
   min-width: 320px;
+  max-width: 560px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+.conversion progress {
+  width: 100%;
 }
 
 .dialog textarea {

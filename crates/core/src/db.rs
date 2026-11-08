@@ -59,6 +59,10 @@ pub enum Error {
     NotFound(PathBuf),
     /// Games can't be written to this kind of file; the text says which kinds are allowed.
     WrongFileType(PathBuf, &'static str),
+    /// A ChessBase file couldn't be read; the text says why.
+    ChessBase(String),
+    /// The user stopped the work.
+    Cancelled,
 }
 
 impl fmt::Display for Error {
@@ -69,13 +73,15 @@ impl fmt::Display for Error {
             Error::InvalidGame(msg) => write!(f, "invalid game: {msg}"),
             Error::NotADatabase(path) => write!(
                 f,
-                "{} is not a ChessVault database; open a .sqlite database or a .pgn file",
+                "{} is not a ChessVault database; open a .sqlite, .pgn, .cbh or .cbv file",
                 path.display()
             ),
             Error::NotFound(path) => write!(f, "{} was not found; it may have been moved or deleted", path.display()),
             Error::WrongFileType(path, allowed) => {
                 write!(f, "{} can't be written to; choose {allowed}", path.display())
             }
+            Error::ChessBase(msg) => write!(f, "{msg}"),
+            Error::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -99,8 +105,10 @@ pub struct Opened {
     pub store: Store,
     /// The database file that was opened or created.
     pub path: PathBuf,
-    /// Games imported from a PGN file; 0 when an existing database was opened.
+    /// Games imported from the file; 0 when an existing database was opened.
     pub imported: usize,
+    /// Games left out of the import because they could not be read.
+    pub skipped: usize,
 }
 
 /// Opens `path` as a database. For a `.pgn` file, opens the database beside it
@@ -113,21 +121,21 @@ pub fn open_path(path: &Path) -> Result<Opened> {
     }
     if !has_extension(path, "pgn") {
         let store = Store::open(path)?;
-        return Ok(Opened { store, path: path.to_path_buf(), imported: 0 });
+        return Ok(Opened { store, path: path.to_path_buf(), imported: 0, skipped: 0 });
     }
     let db_path = path.with_extension("sqlite");
     let existed = db_path.exists();
     let mut store = Store::open(&db_path)?;
     // Databases made before the marker existed count as imported when they have games.
     if store.meta(PGN_IMPORTED)?.is_some() || store.count()? > 0 {
-        return Ok(Opened { store, path: db_path, imported: 0 });
+        return Ok(Opened { store, path: db_path, imported: 0, skipped: 0 });
     }
     let imported = fs::read_to_string(path)
         .map_err(Error::from)
         .and_then(|text| store.import_pgn(&text))
         .and_then(|imported| store.set_meta(PGN_IMPORTED, "1").map(|()| imported));
     match imported {
-        Ok(imported) => Ok(Opened { store, path: db_path, imported }),
+        Ok(imported) => Ok(Opened { store, path: db_path, imported, skipped: 0 }),
         Err(e) => {
             // Don't leave an empty database behind for a PGN that failed to import.
             drop(store);
@@ -151,7 +159,7 @@ pub fn create_database(path: &Path) -> Result<Opened> {
     if !has_extension(path, "sqlite") {
         return Err(Error::WrongFileType(path.to_path_buf(), "a .sqlite file"));
     }
-    Ok(Opened { store: Store::open(path)?, path: path.to_path_buf(), imported: 0 })
+    Ok(Opened { store: Store::open(path)?, path: path.to_path_buf(), imported: 0, skipped: 0 })
 }
 
 /// Adds one game to the file at `path`, creating it if needed: a `.pgn` file gets the game
@@ -232,6 +240,14 @@ pub fn game_count(path: &Path) -> Result<Option<i64>> {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// What [`Store::import_batch`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchCounts {
+    pub added: usize,
+    /// Games left out because their moves are not legal.
+    pub skipped: usize,
+}
 
 /// A game as shown in lists and search results.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -378,6 +394,10 @@ impl Order {
             SortColumn::Date => "date",
         };
         let dir = if self.descending { "DESC" } else { "ASC" };
+        // Every game has a number, and this order needs no sorting even with millions of games.
+        if matches!(self.column, SortColumn::Id) {
+            return format!("ORDER BY id {dir}");
+        }
         // PGN writes unknown values as "?" (or "????.??.??" for a date); they go last like empty ones.
         let unknown = format!("{column} IS NULL OR {column} = '' OR CAST({column} AS TEXT) LIKE '?%'");
         format!("ORDER BY {unknown}, {column} {dir}, id {dir}")
@@ -470,6 +490,45 @@ impl Store {
         Ok(games.len())
     }
 
+    /// Makes the many writes of a conversion fast. A crash can then ruin the database, so this
+    /// is only for a new file that is thrown away unless [`Store::finish_bulk_import`] is reached.
+    pub fn begin_bulk_import(&mut self) -> Result<()> {
+        self.conn.execute_batch(
+            "PRAGMA journal_mode = OFF;
+             PRAGMA synchronous = OFF;
+             DROP INDEX games_white;
+             DROP INDEX games_black;",
+        )?;
+        Ok(())
+    }
+
+    /// Adds games, leaving out those whose moves are not legal, so one bad game among millions
+    /// doesn't lose the others.
+    pub fn import_batch(&mut self, games: &[String]) -> Result<BatchCounts> {
+        let tx = self.conn.transaction()?;
+        let mut counts = BatchCounts { added: 0, skipped: 0 };
+        {
+            let mut insert = tx.prepare_cached(INSERT_GAME)?;
+            for pgn in games {
+                let Ok(headers) = Headers::from_pgn(pgn) else {
+                    counts.skipped += 1;
+                    continue;
+                };
+                insert.execute(headers.insert_params(pgn).as_slice())?;
+                counts.added += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(counts)
+    }
+
+    /// Ends [`Store::begin_bulk_import`]: builds the indexes and returns to safe writing.
+    pub fn finish_bulk_import(&mut self) -> Result<()> {
+        self.conn.execute_batch(SCHEMA)?;
+        self.conn.execute_batch("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;")?;
+        Ok(())
+    }
+
     /// Adds one game and returns its id.
     pub fn add_game(&mut self, pgn: &str) -> Result<i64> {
         let pgn = single_game(pgn)?;
@@ -527,11 +586,11 @@ impl Store {
         Ok(deleted)
     }
 
-    fn meta(&self, key: &str) -> Result<Option<String>> {
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0)).optional()?)
     }
 
-    fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
         Ok(())
     }
@@ -1057,6 +1116,30 @@ mod tests {
     }
 
     /// A fresh, empty directory for one test.
+    #[test]
+    fn a_batch_leaves_out_illegal_games_and_keeps_the_others() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.begin_bulk_import().unwrap();
+        let good = "[White \"A\"]\n[Black \"B\"]\n[Result \"*\"]\n\n1. e4 *".to_string();
+        let illegal = "[White \"C\"]\n[Black \"D\"]\n[Result \"*\"]\n\n1. e5 *".to_string();
+        let counts = store.import_batch(&[good.clone(), illegal, good]).unwrap();
+        assert_eq!(counts, BatchCounts { added: 2, skipped: 1 });
+        store.finish_bulk_import().unwrap();
+        assert_eq!(store.count().unwrap(), 2);
+        assert_eq!(store.search_player("A", Order::default(), 10, 0).unwrap().len(), 2);
+        let indexes: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'games_%'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexes, 2);
+    }
+
+    #[test]
+    fn the_new_errors_read_well() {
+        assert_eq!(Error::Cancelled.to_string(), "cancelled");
+        assert_eq!(Error::ChessBase("could not read x".into()).to_string(), "could not read x");
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("chessvault-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);

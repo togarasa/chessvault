@@ -39,7 +39,10 @@ export type SortColumn =
 export type Order = { column: SortColumn; descending: boolean };
 
 /// What opening a file did: the database used, its games, and how many were just imported.
-export type OpenResult = { database: string; games: number; imported: number };
+export type OpenResult = { database: string; games: number; imported: number; skipped: number };
+
+/// How far converting a file has come; a `total` of 0 means it can't be told yet (`library::Progress`).
+export type ConversionProgress = { done: number; total: number };
 
 /// Which games the Lichess explorer counts (`lichess::Database`).
 export type ExplorerDatabase = "masters" | "lichess";

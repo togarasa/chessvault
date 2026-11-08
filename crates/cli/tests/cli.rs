@@ -116,6 +116,29 @@ fn deletes_and_exports_games() {
 }
 
 #[test]
+fn converts_chessbase_files_to_pgn_and_to_databases() {
+    let dir = TempDir::new("chessbase");
+    let db = dir.path("unused.sqlite");
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/chessbase");
+    let club = fixtures.join("club.cbh");
+
+    let pgn = dir.path("club.pgn");
+    ok(&db, &["convert", club.to_str().unwrap(), "-o", pgn.to_str().unwrap()]);
+    let text = fs::read_to_string(&pgn).unwrap();
+    assert!(text.contains("Alpha, Anna") && text.contains("Gamma, Gerd"), "{text}");
+
+    for (source, database) in [("club.cbh", "from-database.sqlite"), ("club.cbv", "from-archive.sqlite")] {
+        let target = dir.path(database);
+        let source = fixtures.join(source);
+        let out = ok(&db, &["convert-to-database", source.to_str().unwrap(), "-o", target.to_str().unwrap()]);
+        assert!(out.contains("converted 2 games"), "{out}");
+        assert!(ok(&target, &["list"]).contains("Alpha, Anna"));
+        let error = fails(&db, &["convert-to-database", source.to_str().unwrap(), "-o", target.to_str().unwrap()]);
+        assert!(error.contains("already exists"), "{error}");
+    }
+}
+
+#[test]
 fn explains_what_went_wrong() {
     let dir = TempDir::new("errors");
     let db = imported(&dir);

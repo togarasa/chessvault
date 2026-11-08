@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "./api";
+import { largeConversionQuestion } from "./conversion";
+import { ConversionDialog } from "./ConversionDialog";
 import { ContextMenu, Dialog } from "./Dialog";
 import { DatabaseTiles } from "./DatabaseTiles";
 import { EMPTY_FILTER, isEmptyFilter, playerFilter } from "./filter";
@@ -11,7 +13,8 @@ import { SearchBar } from "./SearchBar";
 import { SearchDialog } from "./Search";
 import { Toolbar } from "./Toolbar";
 import { writeGame } from "./tree";
-import { GameSummary } from "./types";
+import { GameSummary, OpenResult } from "./types";
+import { useConversion } from "./useConversion";
 import { useDialogs } from "./useDialogs";
 import { useFileCounts } from "./useFileCounts";
 import { useGameEditor } from "./useGameEditor";
@@ -21,6 +24,13 @@ import "./App.css";
 const THIS_DATABASE = "This database";
 const EXISTING_FILE = "An existing PGN file or database…";
 const NEW_FILE = "A new PGN file or database…";
+
+/// The status bar's report on a file that was opened.
+function openedText({ database, games, imported, skipped }: OpenResult) {
+  const left = skipped > 0 ? ` ${skipped} games were left out: damaged, or with null moves or Chess960.` : "";
+  const done = imported > 0 ? `Imported ${imported} games into ${database}.` : `Opened ${database} (${games} games).`;
+  return done + left;
+}
 
 /// The window: the database tiles, or an open database's game list and the game on the board.
 /// It ties the parts together and runs the file operations; the parts hold their own state.
@@ -35,6 +45,7 @@ function App() {
   const [searchWindow, setSearchWindow] = useState(false);
 
   const dialogs = useDialogs();
+  const conversion = useConversion();
   const list = useGameList(run);
   const editor = useGameEditor(dialogs);
   const counts = useFileCounts(!isOpen, [...(myGames ? [myGames] : []), ...recent.map((f) => f.path)]);
@@ -52,8 +63,16 @@ function App() {
   // Closing the window asks about unsaved changes like every other way of leaving a game. The
   // listener is set up once and always runs the newest version of the handler.
   const onClose = useRef(async () => {});
+  const closeAfterConversion = useRef(false);
+  const opening = useRef(false);
   onClose.current = async () => {
-    if (await confirmDiscard()) await api.closeWindow();
+    // A conversion is stopped first, so that it can clean up; openFile then closes the window.
+    if (conversion.running.current) {
+      closeAfterConversion.current = true;
+      await conversion.cancel();
+    } else if (await confirmDiscard()) {
+      await api.closeWindow();
+    }
   };
   useEffect(() => api.onCloseRequested(() => void onClose.current()), []);
 
@@ -72,32 +91,61 @@ function App() {
   /// Opens a database or PGN file, asking which one when `path` is not given. With `create`, a
   /// database that doesn't exist yet is created; otherwise a missing file is an error.
   async function openFile(path?: string, create = false) {
+    // Keys and clicks can reach the tiles while a file opens; two conversions must not run at once.
+    if (opening.current) return;
+    opening.current = true;
+    try {
+      await chooseAndOpen(path, create);
+    } finally {
+      opening.current = false;
+    }
+  }
+
+  async function chooseAndOpen(path?: string, create = false) {
     if (!(await confirmDiscard())) return;
     const chosen =
       path ??
-      (await api.chooseFileToOpen("Open a PGN file or database", [api.GAME_FILES, api.PGN_FILES, api.DATABASE_FILES], folderOf(dbPath)));
-    if (chosen === null) return;
+      (await api.chooseFileToOpen(
+        "Open a game file",
+        [api.OPENABLE_FILES, api.PGN_FILES, api.DATABASE_FILES, api.CBH_FILES],
+        folderOf(dbPath),
+      ));
+    if (chosen === null || !(await confirmConversion(chosen))) return;
     let opened: Awaited<ReturnType<typeof api.openDatabase>>;
+    conversion.begin();
     try {
       opened = await (create ? api.createDatabase(chosen) : api.openDatabase(chosen));
     } catch (error) {
+      conversion.end();
+      if (closeAfterConversion.current) return api.closeWindow();
+      if (error === api.CANCELLED) {
+        setStatus(`Stopped converting ${fileName(chosen)}.`);
+        return;
+      }
       setStatus(String(error));
       await offerToForget(chosen, error);
       return;
     }
+    conversion.end();
+    // The conversion had just finished when the window was closed; there is nothing to clean up.
+    if (closeAfterConversion.current) return api.closeWindow();
     setDbPath(chosen);
     setRecent(addRecent(chosen));
     await run(async () => {
       setIsOpen(true);
       editor.show(null, null);
-      setStatus(
-        opened.imported > 0
-          ? `Imported ${opened.imported} games into ${opened.database}.`
-          : `Opened ${opened.database} (${opened.games} games).`,
-      );
+      setStatus(openedText(opened));
       setSearchText("");
       await list.showNewDatabase();
     });
+  }
+
+  /// Asks before a conversion that takes long and makes a large file. Returns whether to go on.
+  async function confirmConversion(path: string) {
+    const games = await api.gamesToConvert(path);
+    const question = games === null ? null : largeConversionQuestion(games);
+    if (question === null) return true;
+    return (await askUser({ title: question, choices: [{ label: "Convert", value: "convert" }] })) === "convert";
   }
 
   /// After a recent file failed to open, offers to take it off the list.
@@ -189,7 +237,7 @@ function App() {
       if (!answer) return;
       onlyShown = answer === "shown";
     }
-    const path = await api.chooseFileToSave("Export to PGN", [api.PGN_FILES], `${dbPath.replace(/\.(pgn|sqlite)$/i, "")} (ChessVault).pgn`);
+    const path = await api.chooseFileToSave("Export to PGN", [api.PGN_FILES], `${dbPath.replace(/\.(pgn|sqlite|cbh|cbv)$/i, "")} (ChessVault).pgn`);
     if (!path) return;
     if (editor.dirty) {
       const answer = await askUser({
@@ -403,6 +451,7 @@ function App() {
 
       <footer className="status">{status}</footer>
       {dialogs.ask && <Dialog ask={dialogs.ask} />}
+      {conversion.progress && <ConversionDialog progress={conversion.progress} cancelling={conversion.cancelling} onCancel={conversion.cancel} />}
       {searchWindow && (
         <SearchDialog
           initial={list.filter ?? EMPTY_FILTER}
