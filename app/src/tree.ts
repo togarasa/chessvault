@@ -35,9 +35,12 @@ function newNode(parent: MoveNode | null, san: string, pos: Position, ply: numbe
 /// Parses the first game in `pgn` with its variations, comments and symbols.
 /// Moves that are not legal cut their line off.
 export function parseGame(pgn: string): GameTree {
-  // Some exports write brackets in tag values as `\[` and `\]`, which PGN doesn't allow
-  // and which would make the parser lose the whole game.
-  const cleaned = pgn.replace(/^\s*\[\w+\s+".*$/gm, (tag) => tag.replace(/\\([[\]])/g, "$1"));
+  // Some files write brackets in tag values as `\[` and `\]`, which PGN doesn't allow; others
+  // escape that backslash again, or cut a long name just after it. Any of these would make the
+  // parser lose the whole game.
+  const cleaned = pgn.replace(/^\s*\[\w+\s+".*$/gm, (tag) =>
+    tag.replace(/\\+([[\]])/g, "$1").replace(/\\+"\]\s*$/, '"]'),
+  );
   const game = parsePgn(cleaned)[0];
   if (!game) throw new Error("no game in the PGN");
   const expected = [...game.moves.mainline()].length;

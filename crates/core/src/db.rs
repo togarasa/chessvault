@@ -790,9 +790,15 @@ fn tag(pgn: &str, name: &str) -> String {
                 .strip_prefix(name)?
                 .strip_prefix(' ')?
                 .strip_prefix('"')?;
-            Some(unescape(rest.strip_suffix("\"]")?))
+            Some(without_stray_backslashes(&unescape(rest.strip_suffix("\"]")?)))
         })
         .unwrap_or_default()
+}
+
+/// A tag value without the backslashes some files put before brackets, including one left at
+/// the end when a long name was cut short. The board reads these names the same way.
+fn without_stray_backslashes(value: &str) -> String {
+    value.replace("\\[", "[").replace("\\]", "]").trim_end_matches('\\').to_string()
 }
 
 /// A tag value without PGN's escapes: `\"` is a quote and `\\` a backslash.
@@ -1287,6 +1293,10 @@ mod tests {
         assert_eq!(tag("[Site \"C:\\\\Club\"]\n", "Site"), "C:\\Club");
         assert_eq!(tag("[Site \"a\\b\"]\n", "Site"), "a\\b", "a lone backslash stays");
         assert_eq!(unescape("end\\"), "end\\");
+        // Backslashes before brackets are never part of a name, however many there are.
+        assert_eq!(tag("[White \"Goetz, A \\[66\\]\"]\n", "White"), "Goetz, A [66]");
+        assert_eq!(tag("[White \"Vykouk, J \\\\[2000\\\\]\"]\n", "White"), "Vykouk, J [2000]");
+        assert_eq!(tag("[Black \"Simon, M \\\\[60Neu\\\\\"]\n", "Black"), "Simon, M [60Neu");
     }
 
     #[test]

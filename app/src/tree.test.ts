@@ -58,6 +58,19 @@ describe("parseGame and writeGame", () => {
     expect(line(tree.root)).toEqual(["d4", "d5"]);
   });
 
+  it("reads names whose bracket backslashes were escaped again or cut short", () => {
+    const twice = parseGame('[White "Vykouk, Jan1 \\\\[2000\\\\]"]\n\n1. e4 Nf6 *');
+    expect(twice.headers.get("White")).toBe("Vykouk, Jan1 [2000]");
+    expect(line(twice.root)).toEqual(["e4", "Nf6"]);
+
+    const cut = parseGame('[White "A"]\n[Black "Simon, Martin1 \\\\[60Neumkt\\\\"]\n\n1. e4 *');
+    expect(cut.headers.get("Black")).toBe("Simon, Martin1 [60Neumkt");
+    expect(line(cut.root)).toEqual(["e4"]);
+
+    const quote = parseGame('[White "O\\"Brien"]\n\n1. e4 *');
+    expect(quote.headers.get("White")).toBe('O"Brien');
+  });
+
   it("starts from the FEN tag with the right move numbers", () => {
     const fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
     const tree = parseGame(`[FEN "${fen}"]\n[SetUp "1"]\n\n1... e5 2. Nf3 *`);

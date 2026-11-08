@@ -30,5 +30,10 @@ from the code.
 The reviewer also confirmed as correct: the progress arithmetic, archive names that try to leave the
 folder are refused, and nothing can write to the source files.
 
-After the fixes: Rust 87 tests and frontend 177 unit and component tests pass, plus 19 e2e tests.
+Found afterwards, not by the review: while the user was testing, 147 of the 1,584 games in their real
+database would not open on the board, because of names such as `Vykouk, Jan1 \\[2000\\]`. The tests
+used only made-up names. Fixed in the game reader and the list; all 1,584 games and a sample of
+202,021 from the 6.4-million-game database now read. This fix wasn't reviewed separately.
+
+After the fixes in the review: Rust 87 tests and frontend 177 unit and component tests pass, plus 19 e2e tests.
 Branch coverage is Rust 87.95% and frontend 97.46%.
