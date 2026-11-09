@@ -489,16 +489,25 @@ describe("saving games", () => {
     expect(api.getGame).toHaveBeenCalledTimes(reads);
   });
 
-  it("asks before Undo last save throws away unsaved changes", async () => {
+  it("with unsaved changes, Undo last save first goes back to the saved game, after asking", async () => {
     await openClub();
     await openGame("Gamma, Gerd");
+    const saved = (screen.getByLabelText("Event") as HTMLInputElement).value;
     fireEvent.change(screen.getByLabelText("Event"), { target: { value: "Changed" } });
     await userEvent.click(button("Undo last save"));
     await userEvent.click(dialog().getByRole("button", { name: "Cancel" }));
-    expect(api.undoGame).not.toHaveBeenCalled();
     expect((screen.getByLabelText("Event") as HTMLInputElement).value).toBe("Changed");
+
     await userEvent.click(button("Undo last save"));
     await userEvent.click(dialog().getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect((screen.getByLabelText("Event") as HTMLInputElement).value).toBe(saved));
+    expect(status()).toBe("Back to the saved version of game 2.");
+    // No saved version was undone.
+    expect(api.undoGame).not.toHaveBeenCalled();
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+
+    // Now it undoes the last save.
+    await userEvent.click(button("Undo last save"));
     await waitFor(() => expect(api.undoGame).toHaveBeenCalledWith(2));
   });
 

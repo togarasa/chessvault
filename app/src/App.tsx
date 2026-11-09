@@ -353,7 +353,16 @@ function App() {
 
   async function undoSave() {
     const id = editor.gameId;
-    if (id === null || !(await confirmDiscard())) return;
+    if (id === null) return;
+    // Unsaved changes are what the user wants to undo first: back to the game as last saved.
+    if (editor.dirty) {
+      if (!(await confirmDiscard())) return;
+      await run(async () => {
+        await reloadGame(id);
+        setStatus(`Back to the saved version of game ${id}.`);
+      });
+      return;
+    }
     await run(async () => {
       if (!(await api.undoGame(id))) {
         setStatus(`Game ${id} has no earlier version.`);

@@ -129,8 +129,9 @@ Right-click a move in the notation for:
 Changes show **Unsaved changes** next to the buttons. ChessVault asks before anything throws them
 away: opening another game or database, a new game, **Undo last save**, or closing the window.
 
-- **Save** stores the game in its database. **Undo last save** brings back the version from before
-  the last save; you can undo several saves in a row.
+- **Save** stores the game in its database. **Undo last save** first throws away unsaved changes,
+  after asking, and shows the game as you last saved it. Without unsaved changes it brings back the
+  version from before the last save; you can undo several saves in a row.
 - **New game** starts an empty board. **Save as new game** asks for the players, event, date and
   result, and where to save it:
 
