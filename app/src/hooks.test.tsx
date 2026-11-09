@@ -55,10 +55,16 @@ describe("useDialogs", () => {
 /// The editor hook with a scripted `askUser`: each question gets the next answer.
 function editor(answers: (string | null)[] = [], busy = false) {
   const askUser = vi.fn(async (_question: Omit<Ask, "answer" | "fields">) => answers.shift() ?? null);
-  const hook = renderHook((props: { busy: boolean }) => useGameEditor({ askUser, busy: props.busy }), {
+  const onSave = vi.fn();
+  const hook = renderHook((props: { busy: boolean }) => useGameEditor({ askUser, busy: props.busy, onSave }), {
     initialProps: { busy },
   });
-  return { ...hook, askUser };
+  return { ...hook, askUser, onSave };
+}
+
+/// Presses a key on `target`, the window unless given.
+function press(key: string, target: EventTarget = window, modifiers: KeyboardEventInit = {}) {
+  act(() => void target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, ...modifiers })));
 }
 
 function run(item: MenuItem | undefined) {
@@ -214,8 +220,6 @@ describe("useGameEditor", () => {
   it("steps through moves with the arrow keys, Home and End", () => {
     const { result, rerender } = editor();
     act(() => result.current.show(1, PGN));
-    const press = (key: string, target: EventTarget = window) =>
-      act(() => void target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })));
     press("ArrowRight");
     expect(result.current.current?.san).toBe("e4");
     press("End");
@@ -238,6 +242,82 @@ describe("useGameEditor", () => {
     rerender({ busy: true });
     press("ArrowRight");
     expect(result.current.current).toBe(result.current.tree!.root);
+  });
+
+  it("flips the board with F, deletes with Delete and saves with Ctrl+S, also while typing", () => {
+    const { result, rerender, onSave } = editor();
+    act(() => result.current.show(1, PGN));
+    expect(result.current.orientation).toBe("white");
+    press("f");
+    expect(result.current.orientation).toBe("black");
+    press("F");
+    expect(result.current.orientation).toBe("white");
+    // Ctrl+F is the window's, not a flip.
+    press("f", window, { ctrlKey: true });
+    expect(result.current.orientation).toBe("white");
+
+    press("Delete");
+    expect(result.current.dirty).toBe(false);
+    press("End");
+    press("Delete");
+    expect(result.current.current?.san).toBe("e5");
+    expect(result.current.dirty).toBe(true);
+    // Holding a key down acts once.
+    press("Delete", window, { repeat: true });
+    press("f", window, { repeat: true });
+    press("s", window, { ctrlKey: true, repeat: true });
+    expect([result.current.current?.san, result.current.orientation]).toEqual(["e5", "white"]);
+    expect(onSave).not.toHaveBeenCalled();
+
+    const input = document.body.appendChild(document.createElement("input"));
+    press("f", input);
+    press("Delete", input);
+    expect([result.current.orientation, result.current.current?.san]).toEqual(["white", "e5"]);
+    press("s", input, { ctrlKey: true });
+    expect(onSave).toHaveBeenCalledOnce();
+    input.remove();
+    press("S", window, { metaKey: true });
+    expect(onSave).toHaveBeenCalledTimes(2);
+
+    rerender({ busy: true });
+    press("s", window, { ctrlKey: true });
+    press("f");
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(result.current.orientation).toBe("white");
+
+    // The window's own Save never opens, also without a game.
+    act(() => result.current.show(null, null));
+    const ctrlS = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, cancelable: true });
+    window.dispatchEvent(ctrlS);
+    expect(ctrlS.defaultPrevented).toBe(true);
+  });
+
+  it("plays a line of moves, asking only where the game goes on differently", async () => {
+    const { result, askUser } = editor(["variation"]);
+    act(() => result.current.show(1, PGN));
+    // 1. e4 is the game's move; 1... c5 is new there, and then the line goes on alone.
+    await act(() => result.current.playLine(["e4", "c5", "Nf3", "d6"]));
+    expect(askUser).toHaveBeenCalledOnce();
+    expect(result.current.current?.san).toBe("d6");
+    expect(result.current.draft).toContain("( 1... c5 2. Nf3 d6 )");
+  });
+
+  it("stops a line at a move that is cancelled or not legal, keeping the moves before", async () => {
+    const { result } = editor([null]);
+    act(() => result.current.show(1, PGN));
+    await act(() => result.current.playLine(["e4", "c5"]));
+    expect(result.current.current?.san).toBe("e4");
+    expect(result.current.dirty).toBe(false);
+
+    act(() => result.current.toEnd());
+    await act(() => result.current.playLine(["Nc6", "Bc4", "Kxe1"]));
+    expect(result.current.current?.san).toBe("Bc4");
+    await act(() => result.current.playLine(["e4"]));
+    expect(result.current.current?.san).toBe("Bc4");
+
+    act(() => result.current.show(null, null));
+    await act(() => result.current.playLine(["e4"]));
+    expect(result.current.current).toBeNull();
   });
 });
 

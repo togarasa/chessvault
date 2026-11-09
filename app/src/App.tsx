@@ -47,7 +47,22 @@ function App() {
   const dialogs = useDialogs();
   const conversion = useConversion();
   const list = useGameList(run);
-  const editor = useGameEditor(dialogs);
+  const saving = useRef(false);
+  const editor = useGameEditor({
+    ...dialogs,
+    // The game's keys don't reach a game hidden behind the search window or a conversion.
+    busy: dialogs.busy || searchWindow || conversion.progress !== null,
+    onSave: async () => {
+      // A second Ctrl+S during a save would store the same game twice, making an empty undo step.
+      if (!editor.dirty || saving.current) return;
+      saving.current = true;
+      try {
+        await saveGame();
+      } finally {
+        saving.current = false;
+      }
+    },
+  });
   const counts = useFileCounts(!isOpen, [...(myGames ? [myGames] : []), ...recent.map((f) => f.path)]);
   const { askUser } = dialogs;
 

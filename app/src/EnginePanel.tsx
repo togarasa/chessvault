@@ -1,9 +1,10 @@
-import { formatScore, numberMoves } from "./engine";
-import { useEngine } from "./useEngine";
+import { EngineLine, formatScore, numberedMoves } from "./engine";
+import { Engine } from "./useEngine";
 
-/// Runs a UCI engine on the board position and shows its best lines.
-export function EnginePanel({ fen }: { fen: string }) {
-  const { enginePath, setEnginePath, running, lines, error, toggle } = useEngine(fen);
+/// Shows the engine's best lines for the board position and lets the user start and stop it.
+/// Clicking a move of a line plays the line up to that move.
+export function EnginePanel({ engine, onPlay }: { engine: Engine; onPlay: (line: EngineLine, through: number) => void }) {
+  const { enginePath, setEnginePath, running, lines, error, toggle } = engine;
 
   return (
     <div className="panel">
@@ -26,7 +27,13 @@ export function EnginePanel({ fen }: { fen: string }) {
         <div className="engine-line" key={line.multipv}>
           <span className="score">{formatScore(line.score)}</span>
           <span className="depth">d{line.depth}</span>
-          <span className="pv">{numberMoves(line.fen, line.moves.slice(0, 12))}</span>
+          <span className="pv">
+            {numberedMoves(line.fen, line.moves.slice(0, 12)).map((label, i) => (
+              <button key={i} className="pv-move" title="Play the line up to here" onClick={() => onPlay(line, i)}>
+                {label}
+              </button>
+            ))}
+          </span>
         </div>
       ))}
     </div>

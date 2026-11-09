@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "./app";
+import { FAKE_ENGINE } from "./global-setup";
 
 const DOCS = resolve(import.meta.dirname, "../../docs/user");
 const CLI = resolve(import.meta.dirname, "../node_modules/@playwright/cli/playwright-cli.js");
@@ -151,6 +152,22 @@ test("engine panel", async ({ chessvault: { page, pgn, openFile } }) => {
   await expect(page.locator(".engine-line")).toHaveCount(3, { timeout: 15_000 });
   await page.waitForTimeout(2000);
   await page.locator(".panel").first().screenshot({ path: resolve(DOCS, "images", "engine-panel.png") });
+  await page.getByRole("button", { name: "Stop" }).click();
+});
+
+test("evaluation bar and a clickable engine line", async ({ chessvault: { page, pgn, openFile } }) => {
+  // The tests' stand-in engine always suggests 1. e4, which is enough to show how it looks.
+  await page.evaluate((path) => localStorage.setItem("chessvault.enginePath", path), FAKE_ENGINE);
+  await openFile(pgn);
+  await page.getByRole("button", { name: "New game" }).click();
+  await page.getByRole("button", { name: "Analyze" }).click();
+  await expect(page.locator(".evalbar")).toHaveAttribute("title", "+0.30");
+  // Show the example path from the guide, not where the stand-in engine is on this computer.
+  await page.locator(".panel input.path").evaluate((input: HTMLInputElement) => {
+    input.value = "C:\\Tools\\stockfish\\stockfish-windows-x86-64.exe";
+  });
+  await page.locator(".engine-line .pv-move").first().hover();
+  await page.locator(".gameview").screenshot({ path: resolve(DOCS, "images", "analysis.png") });
   await page.getByRole("button", { name: "Stop" }).click();
 });
 

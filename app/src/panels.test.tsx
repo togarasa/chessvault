@@ -6,6 +6,8 @@ import { Board } from "./Board";
 import { EngineLine } from "./engine";
 import { Explorer } from "./types";
 import { EnginePanel } from "./EnginePanel";
+import { EvalBar } from "./EvalBar";
+import { useEngine } from "./useEngine";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { GameView } from "./GameView";
 import { START_FEN, useGameEditor } from "./useGameEditor";
@@ -93,10 +95,34 @@ const line = (fen: string, multipv: number, extra: Partial<EngineLine> = {}): En
   ...extra,
 });
 
+/// The engine panel with its engine, as the game view puts them together.
+function Engine({ fen, onPlay = () => {} }: { fen: string; onPlay?: (line: EngineLine, through: number) => void }) {
+  return <EnginePanel engine={useEngine(fen)} onPlay={onPlay} />;
+}
+
+describe("EvalBar", () => {
+  const white = () => document.querySelector(".evalbar-white") as HTMLElement | null;
+
+  it("fills White's share on White's side, and is empty without a score", () => {
+    const { rerender } = render(<EvalBar score={null} orientation="white" />);
+    expect(document.querySelector(".evalbar.idle")).toBeTruthy();
+    expect(white()).toBeNull();
+
+    rerender(<EvalBar score={{ kind: "mate", value: 1 }} orientation="white" />);
+    expect(white()!.style.height).toBe("100%");
+    expect(document.querySelector(".evalbar")!.className).toContain("white-below");
+    expect(document.querySelector(".evalbar")!.getAttribute("title")).toBe("#1");
+
+    rerender(<EvalBar score={{ kind: "cp", value: 0 }} orientation="black" />);
+    expect(white()!.style.height).toBe("50%");
+    expect(document.querySelector(".evalbar")!.className).toContain("white-above");
+  });
+});
+
 describe("EnginePanel", () => {
   it("starts with the remembered engine and analyses while running", async () => {
     localStorage.setItem("chessvault.enginePath", "C:\\stockfish.exe");
-    const { rerender } = render(<EnginePanel fen={START_FEN} />);
+    const { rerender } = render(<Engine fen={START_FEN} />);
     await userEvent.click(screen.getByRole("button", { name: "Analyze" }));
     expect(api.startAnalysis).toHaveBeenCalledWith("C:\\stockfish.exe", START_FEN);
     expect(screen.getByText("Thinking…")).toBeTruthy();
@@ -108,10 +134,11 @@ describe("EnginePanel", () => {
     expect(document.querySelectorAll(".engine-line")).toHaveLength(2);
     expect(screen.getByText("+0.25")).toBeTruthy();
     expect(screen.getByText("#3")).toBeTruthy();
-    expect(screen.getAllByText("1. e4 e5")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "1. e4" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "e5" })).toHaveLength(2);
 
     // A new position clears the lines and analyses again.
-    rerender(<EnginePanel fen={AFTER_E4} />);
+    rerender(<Engine fen={AFTER_E4} />);
     expect(document.querySelectorAll(".engine-line")).toHaveLength(0);
     expect(api.startAnalysis).toHaveBeenLastCalledWith("C:\\stockfish.exe", AFTER_E4);
 
@@ -121,7 +148,7 @@ describe("EnginePanel", () => {
   });
 
   it("remembers a typed engine path and needs one to start", async () => {
-    render(<EnginePanel fen={START_FEN} />);
+    render(<Engine fen={START_FEN} />);
     const analyze = screen.getByRole("button", { name: "Analyze" }) as HTMLButtonElement;
     expect(analyze.disabled).toBe(true);
     await userEvent.type(screen.getByPlaceholderText(/Path to Stockfish/), "D:\\sf.exe");
@@ -132,7 +159,7 @@ describe("EnginePanel", () => {
   it("shows when the engine can't start or stop", async () => {
     vi.mocked(api.startAnalysis).mockRejectedValueOnce("could not start the engine");
     localStorage.setItem("chessvault.enginePath", "bad.exe");
-    render(<EnginePanel fen={START_FEN} />);
+    render(<Engine fen={START_FEN} />);
     await userEvent.click(screen.getByRole("button", { name: "Analyze" }));
     expect(await screen.findByText("could not start the engine")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Analyze" })).toBeTruthy();
@@ -143,8 +170,19 @@ describe("EnginePanel", () => {
     expect(await screen.findByText("the engine stopped responding")).toBeTruthy();
   });
 
+  it("passes on the line and the move clicked in it", async () => {
+    localStorage.setItem("chessvault.enginePath", "sf.exe");
+    const onPlay = vi.fn();
+    render(<Engine fen={START_FEN} onPlay={onPlay} />);
+    await userEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    const shown = line(START_FEN, 1);
+    act(() => engine.onLine!(shown));
+    await userEvent.click(screen.getByRole("button", { name: "e5" }));
+    expect(onPlay).toHaveBeenCalledWith(shown, 1);
+  });
+
   it("stops the engine and its events when it closes", () => {
-    const { unmount } = render(<EnginePanel fen={START_FEN} />);
+    const { unmount } = render(<Engine fen={START_FEN} />);
     unmount();
     expect(api.stopAnalysis).toHaveBeenCalled();
     expect(engine.stop).toHaveBeenCalled();
@@ -349,5 +387,33 @@ describe("GameView", () => {
     expect((screen.getByRole("button", { name: "Undo last save" }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(await screen.findByText("e4"));
     await waitFor(() => expect(fresh.hook.result.current.current!.san).toBe("e4"));
+  });
+
+  it("flips the board, and plays an engine line up to the move clicked", async () => {
+    vi.mocked(api.hasLichessToken).mockResolvedValue(false);
+    localStorage.setItem("chessvault.enginePath", "sf.exe");
+    const { hook, refresh } = view(null, "*");
+    await userEvent.click(screen.getByRole("button", { name: "Flip board" }));
+    refresh();
+    expect(hook.result.current.orientation).toBe("black");
+    expect(lastSet().orientation).toBe("black");
+
+    await userEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    act(() => engine.onLine!(line(START_FEN, 1, { moves: ["e4", "e5", "Nf3"] })));
+    expect((document.querySelector(".evalbar-white") as HTMLElement).style.height).not.toBe("");
+    await userEvent.click(screen.getByRole("button", { name: "e5" }));
+    await waitFor(() => expect(hook.result.current.current?.san).toBe("e5"));
+    expect(hook.result.current.draft).toContain("1. e4 e5");
+  });
+
+  it("stops the engine when the game leaves the board", async () => {
+    vi.mocked(api.hasLichessToken).mockResolvedValue(false);
+    localStorage.setItem("chessvault.enginePath", "sf.exe");
+    const { hook, refresh } = view(1, PGN);
+    await userEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    act(() => hook.result.current.show(null, null));
+    refresh();
+    await waitFor(() => expect(api.stopAnalysis).toHaveBeenCalled());
+    expect(api.startAnalysis).toHaveBeenCalledOnce();
   });
 });

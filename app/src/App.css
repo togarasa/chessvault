@@ -166,6 +166,45 @@ button {
   aspect-ratio: 1;
 }
 
+.board-row {
+  display: flex;
+  gap: 6px;
+  max-width: 440px;
+}
+
+.board-row .board {
+  flex: 1;
+  min-width: 0;
+}
+
+.evalbar {
+  width: 14px;
+  flex: none;
+  display: flex;
+  background: #3a3a3a;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.evalbar.white-below {
+  flex-direction: column-reverse;
+}
+
+.evalbar.white-above {
+  flex-direction: column;
+}
+
+.evalbar.idle {
+  background: var(--panel);
+}
+
+.evalbar-white {
+  width: 100%;
+  background: #f4f4f4;
+  transition: height 0.3s;
+}
+
 .controls {
   display: flex;
   gap: 4px;
@@ -235,6 +274,19 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pv-move {
+  border: none;
+  background: none;
+  padding: 0 3px 0 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pv-move:hover {
+  text-decoration: underline;
 }
 
 .opening {

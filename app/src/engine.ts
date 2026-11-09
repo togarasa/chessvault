@@ -31,19 +31,30 @@ export function formatScore(score: Score): string {
   return `${pawns > 0 ? "+" : ""}${pawns.toFixed(2)}`;
 }
 
-/// SAN moves with move numbers, starting from the position in `fen`.
-export function numberMoves(fen: string, moves: string[]): string {
+/// Each SAN move as it is shown, with its move number where one belongs, starting from the
+/// position in `fen`.
+export function numberedMoves(fen: string, moves: string[]): string[] {
   const fields = fen.split(" ");
   let whiteToMove = fields[1] !== "b";
   let moveNumber = Number(fields[5]) || 1;
-  return moves
-    .map((san, i) => {
-      const label = whiteToMove ? `${moveNumber}. ${san}` : i === 0 ? `${moveNumber}... ${san}` : san;
-      if (!whiteToMove) moveNumber += 1;
-      whiteToMove = !whiteToMove;
-      return label;
-    })
-    .join(" ");
+  return moves.map((san, i) => {
+    const label = whiteToMove ? `${moveNumber}. ${san}` : i === 0 ? `${moveNumber}... ${san}` : san;
+    if (!whiteToMove) moveNumber += 1;
+    whiteToMove = !whiteToMove;
+    return label;
+  });
+}
+
+/// SAN moves with move numbers, starting from the position in `fen`.
+export function numberMoves(fen: string, moves: string[]): string {
+  return numberedMoves(fen, moves).join(" ");
+}
+
+/// How much of the evaluation bar is White's, from 0 to 100: half when equal, most of it for a
+/// clear advantage. Pawns turn into a winning chance the way Lichess's analysis does.
+export function whiteShare(score: Score): number {
+  if (score.kind === "mate") return score.value > 0 ? 100 : 0;
+  return 100 / (1 + Math.exp(-0.00368208 * score.value));
 }
 
 /// Puts a new line in its place by line number, keeping the others.

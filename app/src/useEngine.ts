@@ -51,3 +51,5 @@ export function useEngine(fen: string) {
 
   return { enginePath, setEnginePath, running, lines, error, toggle };
 }
+
+export type Engine = ReturnType<typeof useEngine>;

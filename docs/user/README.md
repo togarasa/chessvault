@@ -89,6 +89,8 @@ own lines or in brackets, and comments in green.
 - **Click any move** in the notation to see the position after it.
 - Use the **arrow keys** or the buttons below the board: `|<` start, `<` back, `>` forward,
   `>|` end of the line.
+- **⇅** below the board, or the **F** key, turns the board round to see it from Black's side. It
+  stays that way for other games until you turn it back.
 
 ## Entering moves and variations
 
@@ -189,6 +191,15 @@ ChessVault works with Stockfish or any other UCI engine. Stockfish is free from
    (`+0.32` is a third of a pawn better for White, `#3` is mate in three) and the search depth.
 3. The analysis follows the board as you move through the game. Click **Stop** to end it.
 
+![The evaluation bar beside the board, and an engine line](images/analysis.png)
+
+- The **bar beside the board** shows the engine's opinion at a glance: the more of it is white,
+  the better White stands. Half and half is equal; a mate fills it completely. It turns with the
+  board.
+- **Click a move in an engine line** to play the line up to that move. Where the game already goes
+  on differently, ChessVault asks as for a move on the board: new variation, overwrite or new main
+  line.
+
 ## Lichess opening explorer
 
 The **Lichess explorer** panel shows how often each move was played in the position and how those
@@ -209,6 +220,9 @@ games ended: White wins, draws and Black wins as a bar, with the average rating.
 | ← | Previous move |
 | Home | Start of the game |
 | End | End of the current line |
+| F | Turn the board round |
+| Delete | Delete the shown move and everything after it (not saved until you save) |
+| Ctrl+S | Save the game, also while typing in a field |
 | Enter | Open the selected database tile; answer a comment |
 | Shift+Enter | New line in a comment |
 | Escape | Close a question, menu or the search window |

@@ -1,10 +1,13 @@
+import { useEffect } from "react";
 import { parseUci } from "chessops/util";
 import { Board } from "./Board";
 import { EnginePanel } from "./EnginePanel";
+import { EvalBar } from "./EvalBar";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { Notation } from "./Notation";
 import { HEADER_FIELDS, RESULTS } from "./pgn";
 import { MoveNode } from "./tree";
+import { useEngine } from "./useEngine";
 import { GameEditor } from "./useGameEditor";
 
 type Props = {
@@ -18,7 +21,14 @@ type Props = {
 /// The game on the board: its headers, the board, the notation, the engine and the explorer.
 export function GameView({ editor, onSave, onUndo, onDelete, onMoveMenu }: Props) {
   const { tree, current, gameId, dirty, fen } = editor;
+  const engine = useEngine(fen);
+  // Without a game there is no panel to stop the engine from, so it must not keep running.
+  const shown = tree !== null;
+  useEffect(() => {
+    if (!shown && engine.running) void engine.toggle();
+  }, [shown, engine.running]);
   if (!tree || !current) return <p className="muted">Select a game, or start a new one.</p>;
+  const best = engine.running ? engine.lines[0] : undefined;
 
   return (
     <>
@@ -40,7 +50,10 @@ export function GameView({ editor, onSave, onUndo, onDelete, onMoveMenu }: Props
       </div>
       <div className="gameview">
         <div className="boardcol">
-          <Board fen={fen} revision={editor.revision} onMove={editor.boardMove} />
+          <div className="board-row">
+            <EvalBar score={best?.fen === fen ? best.score : null} orientation={editor.orientation} />
+            <Board fen={fen} revision={editor.revision} orientation={editor.orientation} onMove={editor.boardMove} />
+          </div>
           <div className="controls">
             <button onClick={() => editor.setCurrent(tree.root)} disabled={!current.parent}>
               |&lt;
@@ -53,6 +66,9 @@ export function GameView({ editor, onSave, onUndo, onDelete, onMoveMenu }: Props
             </button>
             <button onClick={editor.toEnd} disabled={!current.children[0]}>
               &gt;|
+            </button>
+            <button onClick={editor.flip} title="Flip the board (F)" aria-label="Flip board">
+              ⇅
             </button>
           </div>
         </div>
@@ -70,7 +86,10 @@ export function GameView({ editor, onSave, onUndo, onDelete, onMoveMenu }: Props
             </button>
             {dirty && <span className="muted">Unsaved changes</span>}
           </div>
-          <EnginePanel fen={fen} />
+          <EnginePanel
+            engine={engine}
+            onPlay={(line, through) => editor.playLine(line.moves.slice(0, through + 1))}
+          />
           <ExplorerPanel
             fen={fen}
             onPlay={(uci) => {
@@ -84,8 +103,8 @@ export function GameView({ editor, onSave, onUndo, onDelete, onMoveMenu }: Props
         <summary>PGN source</summary>
         <textarea value={editor.draft} onChange={(e) => editor.setDraft(e.currentTarget.value)} spellCheck={false} />
         <p className="muted">
-          Typed edits are saved as they are, unless you then change the game another way (a move, a comment, a
-          symbol or a field above), which writes this text again from the board.
+          Typed edits are saved as they are, unless you then change the game another way (a move, a deletion, a
+          comment, a symbol or a field above), which writes this text again from the board.
         </p>
       </details>
     </>

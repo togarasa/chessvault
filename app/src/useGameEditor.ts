@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Key } from "chessground/types";
-import { Move, NormalMove, Role, SquareName } from "chessops/types";
+import { parseSan } from "chessops/san";
+import { Color, Move, NormalMove, Role, SquareName } from "chessops/types";
 import { parseSquare, squareRank } from "chessops/util";
 import { MenuItem } from "./Dialog";
 import { Dialogs } from "./useDialogs";
@@ -34,7 +35,11 @@ function lineEnd(node: MoveNode): MoveNode {
 }
 
 /// The game on the board: its moves, the shown position, unsaved changes and editing.
-export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy">) {
+export function useGameEditor({
+  askUser,
+  busy,
+  onSave = () => {},
+}: Pick<Dialogs, "askUser" | "busy"> & { onSave?: () => void }) {
   /// The game's id, or null until a new game is saved.
   const [gameId, setGameId] = useState<number | null>(null);
   const [tree, setTree] = useState<GameTree | null>(null);
@@ -45,17 +50,44 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
   const [savedPgn, setSavedPgn] = useState("");
   /// The PGN source text; moves made on the board replace it.
   const [draft, setDraft] = useState("");
+  /// The side shown at the bottom of the board.
+  const [orientation, setOrientation] = useState<Color>("white");
+  // The key handler is set up per position; it must still call the newest save.
+  const save = useRef(onSave);
+  save.current = onSave;
 
   const treePgn = useMemo(() => (tree ? writeGame(tree) : ""), [tree, revision]);
   const dirty = tree !== null && (treePgn !== savedPgn || draft !== treePgn);
 
-  // Arrow keys, Home and End step through the moves, unless the user is typing or a dialog is open.
+  // Ctrl+S is the game's Save, or nothing: never the window's own "Save page".
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") e.preventDefault();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // The keys of the game window, unless a dialog is open. Only Ctrl+S works while typing. A key
+  // held down acts once, so holding Delete can't wipe the game.
   useEffect(() => {
     if (!current || busy) return;
     const node = current;
     function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        if (!e.repeat) save.current();
+        return;
+      }
       const t = e.target;
       if (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement || t instanceof HTMLSelectElement) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.repeat && (e.key === "Delete" || e.key.toLowerCase() === "f")) return;
+      if (e.key.toLowerCase() === "f") return flip();
+      if (e.key === "Delete" && node.parent) {
+        setCurrent(deleteFrom(node));
+        changed();
+        return;
+      }
       const next = {
         ArrowRight: node.children[0],
         ArrowLeft: node.parent,
@@ -99,19 +131,43 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
     setRevision((r) => r + 1);
   }
 
+  function flip() {
+    setOrientation((side) => (side === "white" ? "black" : "white"));
+  }
+
   /// Plays `move` from the shown position, asking how to add it when the position already has a continuation.
   async function play(move: Move) {
     if (!current) return;
-    const reached = childFor(current, move);
-    // Not legal here, e.g. from an explorer table that still showed another position.
-    if (!reached) return putBack();
-    const { node, existing } = reached;
-    if (existing) {
-      setCurrent(node);
-      return;
+    const reached = await playFrom(current, move);
+    if (reached) setCurrent(reached);
+    else putBack();
+  }
+
+  /// Plays the moves of a line such as an engine's, given in SAN, one after another from the shown
+  /// position. Wherever the game goes on differently it asks as for a move on the board; it stops
+  /// at a move that is cancelled or not legal, keeping the moves before it.
+  async function playLine(sans: string[]) {
+    if (!current) return;
+    let at: MoveNode = current;
+    for (const san of sans) {
+      const move = parseSan(position(at), san);
+      const reached: MoveNode | null = move ? await playFrom(at, move) : null;
+      if (!reached) break;
+      at = reached;
     }
+    setCurrent(at);
+  }
+
+  /// Adds `move` after `from`, asking how when `from` already goes on differently. Returns the
+  /// move's node, or null when the move isn't legal there or the user cancelled.
+  async function playFrom(from: MoveNode, move: Move): Promise<MoveNode | null> {
+    const reached = childFor(from, move);
+    // Not legal here, e.g. from an explorer table that still showed another position.
+    if (!reached) return null;
+    const { node, existing } = reached;
+    if (existing) return node;
     let mode: AddMode = "mainline";
-    if (current.children.length > 0) {
+    if (from.children.length > 0) {
       const answer = await askUser({
         title: `${node.san} is a new move here.`,
         choices: [
@@ -120,12 +176,12 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
           { label: "New main line", value: "mainline" },
         ],
       });
-      if (!answer) return putBack();
+      if (!answer) return null;
       mode = answer as AddMode;
     }
-    addMove(current, node, mode);
-    setCurrent(node);
+    addMove(from, node, mode);
     changed();
+    return node;
   }
 
   /// A move made on the board, asking for the piece when a pawn promotes.
@@ -205,6 +261,8 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
     draft,
     dirty,
     fen: current?.fen ?? START_FEN,
+    orientation,
+    flip,
     show,
     changed,
     markSaved,
@@ -212,6 +270,7 @@ export function useGameEditor({ askUser, busy }: Pick<Dialogs, "askUser" | "busy
     setDraft,
     setHeader,
     play,
+    playLine,
     boardMove,
     moveMenu,
     toEnd: () => current && setCurrent(lineEnd(current)),

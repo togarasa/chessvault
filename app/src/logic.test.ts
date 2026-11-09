@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COLUMNS, DEFAULT_ORDER, nextOrder } from "./columns";
 import { conversionStepText, largeConversionQuestion } from "./conversion";
-import { EngineLine, formatScore, loadEnginePath, numberMoves, saveEnginePath, withLine } from "./engine";
+import {
+  EngineLine,
+  formatScore,
+  loadEnginePath,
+  numberMoves,
+  numberedMoves,
+  saveEnginePath,
+  whiteShare,
+  withLine,
+} from "./engine";
 import { formValue, headerValue, newGamePgn, pgnDate } from "./pgn";
 import { folderOf } from "./recent";
 import { GameSummary } from "./types";
@@ -90,6 +99,16 @@ describe("engine lines", () => {
     expect(numberMoves(black, ["c5", "Nf3"])).toBe("7... c5 8. Nf3");
     expect(numberMoves("8/8/8/8/8/8/8/8", ["Kh1"])).toBe("1. Kh1");
     expect(numberMoves(white, [])).toBe("");
+    expect(numberedMoves(black, ["c5", "Nf3", "d6"])).toEqual(["7... c5", "8. Nf3", "d6"]);
+  });
+
+  it("give the evaluation bar's share of White, half when equal", () => {
+    expect(whiteShare({ kind: "cp", value: 0 })).toBe(50);
+    expect(whiteShare({ kind: "cp", value: 100 })).toBeCloseTo(59.1, 1);
+    expect(whiteShare({ kind: "cp", value: -100 })).toBeCloseTo(40.9, 1);
+    expect(whiteShare({ kind: "cp", value: 2000 })).toBeGreaterThan(99);
+    expect(whiteShare({ kind: "mate", value: 2 })).toBe(100);
+    expect(whiteShare({ kind: "mate", value: -2 })).toBe(0);
   });
 
   it("keep one line per rank, replacing it when a deeper one arrives", () => {

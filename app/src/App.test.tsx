@@ -40,6 +40,7 @@ vi.mock("./Board", () => ({
   ),
 }));
 vi.mock("./EnginePanel", () => ({ EnginePanel: () => null }));
+vi.mock("./useEngine", () => ({ useEngine: () => ({ running: false, lines: [] }) }));
 vi.mock("./ExplorerPanel", () => ({ ExplorerPanel: () => null }));
 
 const CLUB = "C:\\games\\club.pgn";
@@ -108,6 +109,25 @@ async function openGame(white: string) {
   await userEvent.click(screen.getAllByText(white)[0]);
   await screen.findByText("1. e4");
 }
+
+describe("game keys", () => {
+  it("Ctrl+S saves once at a time, and keys don't reach a game behind the search window", async () => {
+    await openClub();
+    await openGame("Alpha, Anna");
+    fireEvent.change(screen.getByLabelText("Event"), { target: { value: "Club final" } });
+    let finish = () => {};
+    vi.mocked(api.saveGame).mockReturnValueOnce(new Promise<void>((resolve) => (finish = resolve)));
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await act(async () => finish());
+    expect(api.saveGame).toHaveBeenCalledOnce();
+
+    fireEvent.change(screen.getAllByLabelText("Event")[0], { target: { value: "Club final 2" } });
+    await userEvent.click(button("Search games…"));
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(api.saveGame).toHaveBeenCalledOnce();
+  });
+});
 
 describe("converting a file", () => {
   /// Starts opening `club.cbh`; the returned functions end the opening.
