@@ -4,14 +4,20 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
+use std::time::Duration;
 
 use serde::Serialize;
-use shakmaty::{fen::Fen, san::SanPlus, uci::UciMove, CastlingMode, Chess, Color, Position};
+use shakmaty::{san::SanPlus, uci::UciMove, CastlingMode, Color, Position};
+
+use crate::validate::position_from_fen;
 
 /// How many lines the engine reports for each position.
 pub const LINES: u32 = 3;
+
+/// How long to wait for a stopped search to end before changing an option anyway.
+const SEARCH_END_WAIT: Duration = Duration::from_secs(2);
 
 /// An engine evaluation, from White's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -108,6 +114,10 @@ pub struct Engine {
     child: Child,
     stdin: ChildStdin,
     search: Arc<Mutex<Search>>,
+    /// Signalled after each line of engine output, so a wait for a stopped search can end.
+    output: Arc<Condvar>,
+    /// Whether the engine's `UCI_Chess960` option is on.
+    chess960: bool,
 }
 
 impl Engine {
@@ -127,20 +137,23 @@ impl Engine {
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
         let search = Arc::new(Mutex::new(Search::default()));
+        let output = Arc::new(Condvar::new());
 
         let shared = Arc::clone(&search);
+        let signal = Arc::clone(&output);
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
                 // The lock is released before `on_line` runs.
                 let analysis = lock(&shared).on_output(&line);
+                signal.notify_all();
                 if let Some(analysis) = analysis {
                     on_line(analysis);
                 }
             }
         });
 
-        let mut engine = Engine { child, stdin, search };
+        let mut engine = Engine { child, stdin, search, output, chess960: false };
         engine.send("uci")?;
         engine.send(&format!("setoption name MultiPV value {LINES}"))?;
         engine.send("isready")?;
@@ -152,6 +165,15 @@ impl Engine {
         let was_running = lock(&self.search).begin(fen);
         if was_running {
             self.send("stop")?;
+        }
+        // In Chess960 mode engines read the position's castling rights and write castling
+        // their own way, so the option is switched only for positions that need it.
+        let chess960 = is_chess960(fen);
+        if chess960 != self.chess960 {
+            // Engines take options only while not searching.
+            self.wait_for_stopped_searches();
+            self.send(&format!("setoption name UCI_Chess960 value {chess960}"))?;
+            self.chess960 = chess960;
         }
         self.send(&format!("position fen {fen}"))?;
         self.send("go infinite")
@@ -166,10 +188,23 @@ impl Engine {
         Ok(())
     }
 
+    /// Waits until every stopped search has sent its `bestmove`, or a short while if the engine
+    /// never does.
+    fn wait_for_stopped_searches(&self) {
+        let _ = self
+            .output
+            .wait_timeout_while(lock(&self.search), SEARCH_END_WAIT, |search| search.stale > 0);
+    }
+
     fn send(&mut self, command: &str) -> io::Result<()> {
         writeln!(self.stdin, "{command}")?;
         self.stdin.flush()
     }
+}
+
+/// Whether `fen` has castling rights that only Chess960 allows.
+fn is_chess960(fen: &str) -> bool {
+    position_from_fen(fen).is_ok_and(|pos| pos.castles().mode() == CastlingMode::Chess960)
 }
 
 impl Drop for Engine {
@@ -230,10 +265,7 @@ impl Info {
     /// Converts the line to SAN from `fen`, with the score from White's side.
     /// Returns `None` if the moves aren't legal from `fen`.
     fn into_line(self, fen: &str) -> Option<EngineLine> {
-        let mut pos: Chess = Fen::from_ascii(fen.as_bytes())
-            .ok()?
-            .into_position(CastlingMode::Standard)
-            .ok()?;
+        let mut pos = position_from_fen(fen).ok()?;
         let white_to_move = pos.turn() == Color::White;
         let mut moves = Vec::with_capacity(self.pv.len());
         for uci in &self.pv {

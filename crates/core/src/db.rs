@@ -1457,7 +1457,6 @@ mod tests {
         assert!(store.update_pgn(id, &two).is_err());
     }
 
-    /// A fresh, empty directory for one test.
     #[test]
     fn a_batch_leaves_out_illegal_games_and_keeps_the_others() {
         let mut store = Store::open_in_memory().unwrap();
@@ -1474,6 +1473,27 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'games_by_%'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(indexes, SORTED.len() as i64);
+    }
+
+    #[test]
+    fn a_batch_keeps_games_with_a_null_move_or_a_chess960_start() {
+        let mut store = Store::open_in_memory().unwrap();
+        let odds = "[White \"Odds\"]
+[Result \"*\"]
+[SetUp \"1\"]
+[FEN \"rnbqkbnr/ppppp1pp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1\"]
+
+1. e4 -- 2. d4 e6 *";
+        let chess960 = "[White \"960\"]
+[Result \"*\"]
+[SetUp \"1\"]
+[FEN \"bbqrknrn/pppppppp/8/8/8/8/PPPPPPPP/BBQRKNRN w KQkq - 0 0\"]
+
+1. Ne3 Ne6 2. O-O *";
+        let counts = store.import_batch(&[odds.to_string(), chess960.to_string()]).unwrap();
+        assert_eq!(counts, BatchCounts { added: 2, skipped: 0 });
+        let plies: Vec<_> = store.list(Order::default(), 10, 0).unwrap().iter().map(|g| g.plies).collect();
+        assert_eq!(plies, [Some(4), Some(3)], "a null move counts as a move");
     }
 
     #[test]

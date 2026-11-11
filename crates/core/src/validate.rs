@@ -2,9 +2,16 @@
 //! a FEN start position. Every token must parse and play, so a typo is an
 //! error instead of being skipped. The same walk also records the main line,
 //! so a board can step through the game.
+//!
+//! Two things some databases contain are accepted as well: a null move `--`, where the side to
+//! move passes (used for odds games and for showing a threat), and Chess960 start positions.
 
 use serde::Serialize;
-use shakmaty::{fen::Fen, san::SanPlus, CastlingMode, Chess, EnPassantMode, Position};
+use shakmaty::{
+    fen::Fen,
+    san::{San, SanPlus},
+    CastlingMode, Chess, Color, EnPassantMode, FromSetup, Position,
+};
 
 /// One position on the main line. The first step is the start position, with
 /// an empty `san`; each later step is the move that reached its position.
@@ -125,20 +132,35 @@ fn check_token(token: &str, lines: &mut [Line], main: &mut Vec<Step>) -> Result<
     let parsed = SanPlus::from_ascii(san.as_bytes()).map_err(|_| format!("invalid move '{token}'"))?;
     let is_main = lines.len() == 1;
     let line = lines.last_mut().expect("at least one line");
-    let mv = parsed
-        .san
-        .to_move(&line.pos)
-        .map_err(|_| format!("illegal move '{token}'"))?;
-    let next = line
-        .pos
-        .clone()
-        .play(mv)
-        .map_err(|_| format!("illegal move '{token}'"))?;
+    let next = play(&line.pos, &parsed.san).ok_or_else(|| format!("illegal move '{token}'"))?;
     line.before_last = Some(std::mem::replace(&mut line.pos, next));
     if is_main {
+        // A null move has two spellings; record the usual one.
+        let san = if parsed.san == San::Null { "--" } else { san };
         main.push(Step { san: san.to_string(), fen: fen_of(&line.pos) });
     }
     Ok(())
+}
+
+/// The position after `san`, or `None` when it is not legal in `pos`.
+fn play(pos: &Chess, san: &San) -> Option<Chess> {
+    if *san == San::Null {
+        return pass(pos);
+    }
+    let mv = san.to_move(pos).ok()?;
+    pos.clone().play(mv).ok()
+}
+
+/// The position after the side to move passes. A player in check can't pass.
+fn pass(pos: &Chess) -> Option<Chess> {
+    let mut setup = pos.to_setup(EnPassantMode::Legal);
+    setup.halfmoves = setup.halfmoves.saturating_add(1);
+    if pos.turn() == Color::Black {
+        setup.fullmoves = setup.fullmoves.saturating_add(1);
+    }
+    setup.swap_turn();
+    // In check, the side that just passed would leave its king attacked, which `from_setup` rejects.
+    Chess::from_setup(setup, pos.castles().mode()).ok()
 }
 
 fn fen_of(pos: &Chess) -> String {
@@ -149,13 +171,19 @@ fn fen_of(pos: &Chess) -> String {
 fn start_position(pgn: &str) -> Result<Chess, String> {
     match header_value(pgn, "FEN") {
         None => Ok(Chess::default()),
-        Some(fen) => {
-            let setup = Fen::from_ascii(fen.as_bytes()).map_err(|_| format!("invalid FEN '{fen}'"))?;
-            setup
-                .into_position(CastlingMode::Standard)
-                .map_err(|_| format!("illegal start position '{fen}'"))
-        }
+        Some(fen) => position_from_fen(fen),
     }
+}
+
+/// The position in `fen`. Castling rights that don't fit standard chess, such as those of a
+/// Chess960 start with the king and rooks elsewhere, are read the Chess960 way.
+pub fn position_from_fen(fen: &str) -> Result<Chess, String> {
+    let setup = Fen::from_ascii(fen.as_bytes()).map_err(|_| format!("invalid FEN '{fen}'"))?;
+    setup
+        .clone()
+        .into_position(CastlingMode::Standard)
+        .or_else(|_| setup.into_position(CastlingMode::Chess960))
+        .map_err(|_| format!("illegal start position '{fen}'"))
 }
 
 /// Reads the value of a header tag such as `[FEN "..."]`.
@@ -183,7 +211,7 @@ fn movetext(pgn: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_movetext, main_line};
+    use super::{check_movetext, main_line, position_from_fen};
 
     const HEADERS: &str = "[Event \"Test\"]\n[Result \"*\"]\n\n";
 
@@ -235,5 +263,65 @@ mod tests {
         assert_eq!(sans, ["", "e4", "e5", "Nf3"]);
         assert_eq!(steps[0].fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
         assert_eq!(steps[1].fen, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
+    }
+    #[test]
+    fn a_null_move_passes_the_turn_and_counts_as_a_move() {
+        let steps = main_line(&game("1. e4 -- 2. d4 e5 *")).unwrap();
+        let sans: Vec<&str> = steps.iter().map(|s| s.san.as_str()).collect();
+        assert_eq!(sans, ["", "e4", "--", "d4", "e5"]);
+        assert_eq!(steps[2].fen, "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 1 2");
+    }
+
+    #[test]
+    fn a_null_move_is_accepted_in_a_variation_and_in_its_other_spelling() {
+        assert_eq!(check_movetext(&game("1. e4 e5 (1... -- 2. d4) 2. Nf3 Z0 3. d4 *")), Ok(()));
+        let steps = main_line(&game("1. Z0 e5 *")).unwrap();
+        assert_eq!(steps[1].san, "--");
+    }
+
+    #[test]
+    fn a_white_null_move_keeps_the_move_number() {
+        let steps = main_line(&game("1. -- e5 *")).unwrap();
+        assert_eq!(steps[1].fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 1 1");
+        assert_eq!(steps[2].fen, "rnbqkbnr/pppp1ppp/8/4p3/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 2");
+    }
+
+    #[test]
+    fn a_null_move_gives_up_an_en_passant_capture() {
+        let steps = main_line(&game("1. e4 Nf6 2. e5 d5 3. -- *")).unwrap();
+        assert_eq!(steps[5].fen, "rnbqkb1r/ppp1pppp/5n2/3pP3/8/8/PPPP1PPP/RNBQKBNR b KQkq - 1 3");
+        assert!(check_movetext(&game("1. e4 Nf6 2. e5 d5 3. -- Nd7 4. exd6 *")).is_err());
+    }
+
+    #[test]
+    fn a_player_in_check_cannot_pass() {
+        let err = check_movetext(&game("1. e4 f5 2. Qh5+ -- *")).unwrap_err();
+        assert!(err.contains("illegal move '--'"), "{err}");
+    }
+
+    #[test]
+    fn a_chess960_start_castles_with_its_own_rooks() {
+        let pgn = "[Event \"960\"]
+[SetUp \"1\"]
+[FEN \"bbqrknrn/pppppppp/8/8/8/8/PPPPPPPP/BBQRKNRN w KQkq - 0 1\"]
+
+1. Ne3 Ne6 2. O-O O-O *
+";
+        let steps = main_line(pgn).unwrap();
+        assert!(steps[3].fen.ends_with("/BBQR1RKN b kq - 3 2"), "{}", steps[3].fen);
+        assert!(steps[4].fen.starts_with("bbqr1rkn/"), "{}", steps[4].fen);
+    }
+
+    #[test]
+    fn a_start_position_with_move_number_zero_is_read_as_move_one() {
+        let pos = position_from_fen("bqnrkbrn/pppppppp/8/8/8/8/PPPPPPPP/BQNRKBRN w KQkq - 0 0").unwrap();
+        assert_eq!(u32::from(shakmaty::Position::fullmoves(&pos)), 1);
+    }
+
+    #[test]
+    fn castling_rights_that_fit_no_start_are_still_an_error() {
+        let err = position_from_fen("4k3/8/8/8/8/8/8/4K3 w KQkq - 0 1").unwrap_err();
+        assert!(err.contains("illegal start position"), "{err}");
+        assert!(position_from_fen("not a fen").unwrap_err().contains("invalid FEN"));
     }
 }

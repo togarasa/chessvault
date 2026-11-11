@@ -11,6 +11,7 @@ The games in the pictures are made-up examples.
 - [Opening ChessBase databases](#opening-chessbase-databases)
 - [The game list](#the-game-list)
 - [Replaying a game](#replaying-a-game)
+- [Null moves and Chess960](#null-moves-and-chess960)
 - [Entering moves and variations](#entering-moves-and-variations)
 - [Comments and symbols](#comments-and-symbols)
 - [Saving games](#saving-games)
@@ -58,9 +59,10 @@ in the same folder, named after the file (`Club.cbh` gets `Club.cbh.sqlite`):
   million games. ChessVault tells you before it starts. If the folder is synced to a cloud service
   such as OneDrive, that file is uploaded too, so you may want to copy the database to another
   folder first. An archive also needs room for its unpacked files during the conversion.
-- A damaged game is left out, and so are games with a null move (`--`) or a Chess960 start, which
-  ChessVault can't show yet. The status bar says how many were left out whenever you open the file:
-  in a test with 6.4 million games that was 563.
+- A damaged game is left out. The status bar says how many were left out whenever you open the file.
+- ChessVault versions before 11 November 2026 also left out games with a null move (`--`) or a
+  Chess960 start (563 of 6.4 million in a test). To bring them in, convert the file again as
+  described in the next point.
 - Games you add in ChessBase later don't appear by themselves. To bring them in, delete the
   `.cbh.sqlite` file and open the database again; this also throws away changes made in ChessVault.
 - ChessVault can't open password-protected archives or the newer `.2cbh` databases.
@@ -92,6 +94,21 @@ own lines or in brackets, and comments in green.
   `>|` end of the line.
 - **⇅** below the board, or the **F** key, turns the board round to see it from Black's side. It
   stays that way for other games until you turn it back.
+
+### Null moves and Chess960
+
+![A null move in the notation](images/null-move.png)
+
+- A **null move**, written `--`, means the side to move passes. Databases use it for odds games, as
+  above where Black plays without the f-pawn and lets White make two moves, and to show what a
+  player threatens. ChessVault shows it, steps through it and keeps it when you save the game.
+  You can't enter one on the board.
+- A **Chess960** game starts from its own position, with the pieces of the back row shuffled.
+  Castling puts the king and rook on the same squares as in normal chess: after `O-O` the king is on
+  g1 and the rook on f1. To castle on the board, move the king onto its own rook. The engine is
+  told by itself that the game is Chess960; Stockfish and most other engines can analyse it.
+
+![A Chess960 game after castling](images/chess960.png)
 
 ## Entering moves and variations
 

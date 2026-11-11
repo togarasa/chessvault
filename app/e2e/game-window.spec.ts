@@ -1,4 +1,6 @@
 import { Page } from "@playwright/test";
+import { copyFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { FAKE_ENGINE } from "./global-setup";
 import { expect, test } from "./app";
 
@@ -61,4 +63,28 @@ test("an engine line is played by clicking its move, and the bar shows the score
   await expect(page.locator(".engine-line .pv-move", { hasText: "1... e5" })).toBeVisible();
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(page.locator(".evalbar.idle")).toBeVisible();
+});
+
+test("a null move and a Chess960 game are shown and analysed", async ({ chessvault: { page, dir, openFile } }) => {
+  const pgn = join(dir, "odds-and-chess960.pgn");
+  copyFileSync(resolve(import.meta.dirname, "fixtures/odds-and-chess960.pgn"), pgn);
+  await page.evaluate((path) => localStorage.setItem("chessvault.enginePath", path), FAKE_ENGINE);
+  await openFile(pgn);
+  await expect(page.locator(".status")).not.toContainText("left out");
+
+  // Black passes in the odds game; the game goes on after it.
+  await openGame(page, "Pawn, Paul");
+  await notation(page).locator(".move", { hasText: "--" }).click();
+  await page.keyboard.press("ArrowRight");
+  await expect(notation(page).locator(".move.active")).toHaveText("2. d4");
+
+  // The Chess960 game castles with its own rooks, and the engine is asked the Chess960 way:
+  // the stand-in engine then answers castling, which it writes as the king taking its rook.
+  await openGame(page, "Shuffle, Sam");
+  await notation(page).locator(".move", { hasText: "Ne6" }).click();
+  await page.getByRole("button", { name: "Analyze" }).click();
+  await expect(page.locator(".engine-line .pv-move", { hasText: "2. O-O" })).toBeVisible();
+  await page.locator(".engine-line .pv-move", { hasText: "2. O-O" }).click();
+  await expect(notation(page).locator(".move.active")).toHaveText("2. O-O");
+  await page.getByRole("button", { name: "Stop" }).click();
 });

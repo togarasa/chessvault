@@ -27,7 +27,7 @@ const NEW_FILE = "A new PGN file or database…";
 
 /// The status bar's report on a file that was opened.
 function openedText({ database, games, imported, skipped }: OpenResult) {
-  const left = skipped > 0 ? ` ${skipped} games were left out: damaged, or with null moves or Chess960.` : "";
+  const left = skipped > 0 ? ` ${skipped} games were left out: damaged, or with moves that are not legal.` : "";
   const done = imported > 0 ? `Imported ${imported} games into ${database}.` : `Opened ${database} (${games} games).`;
   return done + left;
 }

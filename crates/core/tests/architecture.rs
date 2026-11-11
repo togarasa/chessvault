@@ -123,7 +123,12 @@ fn the_domain_does_no_input_or_output() {
 #[test]
 fn adapters_do_not_use_each_other() {
     assert_module_avoids("db.rs", &["crate::engine", "crate::online", "crate::convert", "reqwest", "cbvault"]);
-    assert_module_avoids("engine.rs", &["crate::", "rusqlite", "reqwest", "cbvault"]);
+    assert_module_avoids("engine.rs", &["rusqlite", "reqwest", "cbvault"]);
+    // The engine reads positions with the domain's rules, which points inwards; nothing else.
+    let engine = module_source("engine.rs");
+    for (at, _) in engine.match_indices("crate::") {
+        assert!(engine[at..].starts_with("crate::validate"), "engine.rs may only use crate::validate");
+    }
     assert_module_avoids("online/lichess.rs", &["crate::", "rusqlite", "cbvault", "std::process"]);
     assert_module_avoids("convert.rs", &["crate::", "rusqlite", "reqwest", "std::process"]);
 }

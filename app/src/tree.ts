@@ -1,4 +1,5 @@
 import { Chess, Position, normalizeMove } from "chessops/chess";
+import { opposite } from "chessops/util";
 import { makeFen, parseFen } from "chessops/fen";
 import { ChildNode, Game, Node, PgnNodeData, makePgn, parsePgn, startingPosition } from "chessops/pgn";
 import { makeSanAndPlay, parseSan } from "chessops/san";
@@ -32,6 +33,34 @@ function newNode(parent: MoveNode | null, san: string, pos: Position, ply: numbe
   return { id: nextId++, san, fen: makeFen(pos.toSetup()), ply, startingComments: [], comments: [], nags: [], parent, children: [] };
 }
 
+/// The spellings of a null move, where the side to move passes. Some databases use it for odds
+/// games and to show a threat.
+const NULL_MOVES = new Set(["--", "Z0"]);
+
+/// The position after the side to move passes, or null in check, where passing isn't allowed.
+function pass(pos: Position): Position | null {
+  if (pos.isCheck()) return null;
+  const next = pos.clone();
+  next.halfmoves++;
+  if (pos.turn === "black") next.fullmoves++;
+  next.turn = opposite(pos.turn);
+  next.epSquare = undefined;
+  return next;
+}
+
+/// Plays `san` in `pos`: the move as chessops writes it and the position after it, or null when
+/// it isn't legal there.
+function playSan(pos: Position, san: string): { san: string; next: Position } | null {
+  if (NULL_MOVES.has(san)) {
+    const next = pass(pos);
+    return next && { san: "--", next };
+  }
+  const move = parseSan(pos, san);
+  if (!move) return null;
+  const next = pos.clone();
+  return { san: makeSanAndPlay(next, move), next };
+}
+
 /// Parses the first game in `pgn` with its variations, comments and symbols.
 /// Moves that are not legal cut their line off.
 export function parseGame(pgn: string): GameTree {
@@ -52,10 +81,9 @@ export function parseGame(pgn: string): GameTree {
 
   function build(from: Node<PgnNodeData>, into: MoveNode, pos: Position) {
     for (const child of from.children) {
-      const move = parseSan(pos, child.data.san);
-      if (!move) continue;
-      const next = pos.clone();
-      const san = makeSanAndPlay(next, move);
+      const played = playSan(pos, child.data.san);
+      if (!played) continue;
+      const { san, next } = played;
       const node = newNode(into, san, next, into.ply + 1);
       node.startingComments = child.data.startingComments ?? [];
       node.comments = child.data.comments ?? [];

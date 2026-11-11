@@ -171,6 +171,20 @@ test("evaluation bar and a clickable engine line", async ({ chessvault: { page, 
   await page.getByRole("button", { name: "Stop" }).click();
 });
 
+test("a null move and a Chess960 game", async ({ chessvault: { page, dir, openFile } }) => {
+  const pgn = resolve(dir, "odds-and-chess960.pgn");
+  copyFileSync(resolve(import.meta.dirname, "fixtures/odds-and-chess960.pgn"), pgn);
+  await openFile(pgn);
+  await openGame(page, "Pawn, Paul");
+  await page.locator(".notation .move", { hasText: "--" }).click();
+  await page.waitForTimeout(500); // let the pieces finish moving
+  await page.locator(".gameview").screenshot({ path: resolve(DOCS, "images", "null-move.png") });
+  await openGame(page, "Shuffle, Sam");
+  await page.locator(".notation .move", { hasText: "2. O-O" }).click();
+  await page.waitForTimeout(500);
+  await page.locator(".gameview").screenshot({ path: resolve(DOCS, "images", "chess960.png") });
+});
+
 test("video: open a database and browse a game", async ({ chessvault: { page, pgn, cdpUrl } }) => {
   await seedRecent(page, pgn);
   await video(cdpUrl, "open-and-browse", async () => {

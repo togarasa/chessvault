@@ -163,7 +163,7 @@ describe("converting a file", () => {
     await act(async () => finish({ database: "C:\\games\\club.cbh.sqlite", games: 2, imported: 2, skipped: 3 }));
     expect(await screen.findByText("Gamma, Gerd")).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "Converting" })).toBeNull();
-    expect(status()).toBe("Imported 2 games into C:\\games\\club.cbh.sqlite. 3 games were left out: damaged, or with null moves or Chess960.");
+    expect(status()).toBe("Imported 2 games into C:\\games\\club.cbh.sqlite. 3 games were left out: damaged, or with moves that are not legal.");
 
     // A late event doesn't bring the window back.
     act(() => conversionProgress({ done: 100000, total: 100000 }));
@@ -176,7 +176,7 @@ describe("converting a file", () => {
     vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\club.cbh");
     await userEvent.click(button("Open…"));
     await screen.findByText("Gamma, Gerd");
-    expect(status()).toBe("Opened C:\\games\\club.cbh.sqlite (2 games). 3 games were left out: damaged, or with null moves or Chess960.");
+    expect(status()).toBe("Opened C:\\games\\club.cbh.sqlite (2 games). 3 games were left out: damaged, or with moves that are not legal.");
   });
 
   it("can be cancelled, which isn't reported as a failure to open the file", async () => {

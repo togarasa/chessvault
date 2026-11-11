@@ -1,0 +1,23 @@
+[Event "E2E Odds"]
+[Site "Testville"]
+[Date "2026.02.01"]
+[Round "1"]
+[White "Odds, Olga"]
+[Black "Pawn, Paul"]
+[Result "*"]
+[SetUp "1"]
+[FEN "rnbqkbnr/ppppp1pp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+
+1. e4 -- 2. d4 e6 *
+
+[Event "E2E Chess960"]
+[Site "Testville"]
+[Date "2026.02.08"]
+[Round "1"]
+[White "Random, Rita"]
+[Black "Shuffle, Sam"]
+[Result "*"]
+[SetUp "1"]
+[FEN "bbqrknrn/pppppppp/8/8/8/8/PPPPPPPP/BBQRKNRN w KQkq - 0 1"]
+
+1. Ne3 Ne6 2. O-O O-O *

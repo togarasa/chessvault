@@ -45,6 +45,20 @@ fn reports_lines_for_each_new_position() {
 }
 
 #[test]
+fn tells_the_engine_when_a_position_is_chess960_and_when_it_no_longer_is() {
+    // A Chess960 start after 1. Ne3 Ne6: White's rooks are on d1 and g1.
+    const CHESS960: &str = "bbqrk1rn/pppppppp/4n3/8/8/4N3/PPPPPPPP/BBQRK1RN w KQkq - 2 2";
+    let (mut engine, rx) = start();
+
+    engine.analyze(CHESS960).unwrap();
+    assert_eq!(next_line(&rx).moves, ["O-O"], "the king taking its rook is castling");
+
+    // Back in standard chess the engine answers 1. e4 again, which it only does with Chess960 off.
+    engine.analyze(START).unwrap();
+    assert_eq!(next_line(&rx).moves, ["e4"]);
+}
+
+#[test]
 fn shuts_the_engine_down_when_dropped() {
     let (mut engine, rx) = start();
     engine.analyze(START).unwrap();
@@ -88,4 +102,31 @@ fn analyzes_with_a_real_engine_and_switches_positions() {
     }
     assert!(seen > 0, "the engine reported no lines");
     engine.stop().unwrap();
+}
+
+/// Runs only when asked, like the test above. Castling appears in the engine's lines of a Chess960
+/// position only when the engine was told it is Chess960: otherwise it writes castling as the king's
+/// step f1g1, which here is an ordinary king move.
+#[test]
+#[ignore = "needs a UCI engine at the path in CHESSVAULT_ENGINE"]
+fn a_real_engine_castles_in_a_chess960_position() {
+    // A Chess960 start after 1. Nf3 Nf6, with the kings on f1 and f8 and rooks in the corners.
+    const CHESS960: &str = "rbbnqk1r/pppppppp/5n2/8/8/5N2/PPPPPPPP/RBBNQK1R w KQkq - 2 2";
+    let path = std::env::var("CHESSVAULT_ENGINE").expect("set CHESSVAULT_ENGINE");
+    let (tx, rx) = mpsc::channel();
+    let mut engine = Engine::start(Path::new(&path), move |line| {
+        let _ = tx.send(line);
+    })
+    .unwrap();
+
+    engine.analyze(CHESS960).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut castled = false;
+    while Instant::now() < deadline && !castled {
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
+            castled = line.moves.iter().any(|m| m.starts_with("O-O"));
+        }
+    }
+    engine.stop().unwrap();
+    assert!(castled, "no engine line castled");
 }

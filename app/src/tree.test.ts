@@ -100,6 +100,50 @@ describe("parseGame and writeGame", () => {
   });
 });
 
+describe("null moves and Chess960", () => {
+  const CHESS960 = "bbqrknrn/pppppppp/8/8/8/8/PPPPPPPP/BBQRKNRN w KQkq - 0 0";
+
+  it("plays a null move as a pass, with the same position as the database", () => {
+    const tree = parseGame("1. e4 -- 2. d4 e5 *");
+    expect(line(tree.root)).toEqual(["e4", "--", "d4", "e5"]);
+    const passed = tree.root.children[0].children[0];
+    expect(passed.fen).toBe("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 1 2");
+    expect(passed.ply).toBe(2);
+    expect(childFor(passed, parseUci("d2d4")!)!.existing).toBe(true);
+    expect(movetext(writeGame(tree))).toBe("1. e4 -- 2. d4 e5 *");
+  });
+
+  it("reads a null move in a variation and in its other spelling", () => {
+    const tree = parseGame("1. e4 e5 (1... Z0 2. d4) 2. Nf3 *");
+    expect(tree.root.children[0].children.map((c) => c.san)).toEqual(["e5", "--"]);
+    expect(movetext(writeGame(tree))).toBe("1. e4 e5 ( 1... -- 2. d4 ) 2. Nf3 *");
+  });
+
+  it("keeps the move number when White passes, and gives up an en passant capture", () => {
+    const white = parseGame("1. -- e5 *").root.children[0];
+    expect(white.fen).toBe("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 1 1");
+    expect(movetext(writeGame(parseGame("1. -- e5 *")))).toBe("1. -- e5 *");
+    const tree = parseGame("1. e4 Nf6 2. e5 d5 3. -- *");
+    expect(nodeAt(tree.root, [0, 0, 0, 0, 0]).fen).toBe("rnbqkb1r/ppp1pppp/5n2/3pP3/8/8/PPPP1PPP/RNBQKBNR b KQkq - 1 3");
+  });
+
+  it("refuses a null move in check", () => {
+    expect(() => parseGame("1. e4 f5 2. Qh5+ -- *")).toThrow("move 2 of this game is not legal");
+  });
+
+  it("starts a Chess960 game from its position and castles with its own rooks", () => {
+    const tree = parseGame(`[SetUp "1"]
+[FEN "${CHESS960}"]
+
+1. Ne3 Ne6 2. O-O O-O *`);
+    expect(tree.root.ply).toBe(0);
+    expect(line(tree.root)).toEqual(["Ne3", "Ne6", "O-O", "O-O"]);
+    const beforeCastling = tree.root.children[0].children[0];
+    expect(childFor(beforeCastling, parseUci("e1g1")!)).toEqual({ node: beforeCastling.children[0], existing: true });
+    expect(nodeAt(tree.root, [0, 0, 0, 0]).fen).toBe("bbqr1rkn/pppppppp/4n3/8/8/4N3/PPPPPPPP/BBQR1RKN w - - 4 3");
+  });
+});
+
 describe("childFor and addMove", () => {
   it("follows a move that exists and makes a node for a new one", () => {
     const tree = parseGame("1. e4 e5 *");

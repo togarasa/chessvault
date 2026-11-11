@@ -30,9 +30,9 @@ breaks them fails the build.
 
 | Module | Role | May use |
 |---|---|---|
-| `validate` | Domain: checks PGN movetext and walks the main line. Pure: no files, no network, no database. | `shakmaty`, `serde` |
+| `validate` | Domain: checks PGN movetext (including null moves and Chess960 starts), walks the main line and reads FEN positions. Pure: no files, no network, no database. | `shakmaty`, `serde` |
 | `db` | Game storage in SQLite: import, list, search, edit, undo, export. | `validate`, `rusqlite`, files |
-| `engine` | Runs a UCI engine (Stockfish) as a child process. | `shakmaty`, `serde`, processes |
+| `engine` | Runs a UCI engine (Stockfish) as a child process; switches its `UCI_Chess960` option for positions that need it. | `validate`, `shakmaty`, `serde`, processes |
 | `online::lichess` | Lichess opening explorer over HTTPS. Further services (Chess.com) go beside it in `online`. | `reqwest`, `serde` |
 | `convert` | Reads ChessBase `.cbh` databases and unpacks `.cbv` archives through cbvault. Never writes to them. | `cbvault`, files |
 | `library` | Opens any game file: the use case that combines `db` and `convert`. Converts a ChessBase file once into a database beside it. | `db`, `convert`, files |
@@ -40,7 +40,8 @@ breaks them fails the build.
 Rules:
 - `core` never depends on Tauri, clap, the app or the CLI.
 - `validate` depends on no other module and does no input/output.
-- The adapters (`db`, `engine`, `online`, `convert`) don't use each other; only `db` uses `validate`.
+- The adapters (`db`, `engine`, `online`, `convert`) don't use each other. `db` and `engine` use
+  `validate`, which points inwards to the domain.
 
 ### `crates/cli` — command-line adapter
 
