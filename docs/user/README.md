@@ -54,7 +54,7 @@ in the same folder, named after the file (`Club.cbh` gets `Club.cbh.sqlite`):
 - This happens once; afterwards the file opens straight away, even if you later move or delete the
   original. **Cancel** stops it and leaves nothing behind, and you can start again later. While an
   archive is unpacked or the database is finishing, stopping has to wait until that step is done.
-- A very large database takes a while and makes a large file: about 6 minutes and 5.8 GB for 6.4
+- A very large database takes a while and makes a large file: about 7 minutes and 6.8 GB for 6.4
   million games. ChessVault tells you before it starts. If the folder is synced to a cloud service
   such as OneDrive, that file is uploaded too, so you may want to copy the database to another
   folder first. An archive also needs room for its unpacked files during the conversion.
@@ -74,8 +74,9 @@ number of moves, the ECO opening code, event, site, round and date.
 
 - **Click a column header** to sort by it, and click it again to reverse the order. Games without
   a value, such as an unrated player, are always listed last.
-- **Scroll down** to load more games; large databases load 200 games at a time. In a database of
-  millions of games, sorting by a column other than the number and searching take a long time.
+- **Scroll down** to load more games; large databases load 200 games at a time. Sorting the whole
+  list is quick even with millions of games. A search goes through all games and then sorts what
+  it found: about a second for 6.4 million games, more when it finds a large part of them.
 - **Right-click a game** to open or delete it.
 
 ## Replaying a game
@@ -230,6 +231,12 @@ games ended: White wins, draws and Black wins as a bar, with the average rating.
 
 ## Where your games are kept
 
+- A database made by an older ChessVault is updated the first time this version opens it. That is
+  quick for most databases; one of millions of games takes a few minutes (2¼ for 6.4 million),
+  once. Meanwhile the status bar says **Opening…**. While it runs it needs free room of about
+  three times the database's size on its drive, and once more in Windows' temporary folder. Older
+  versions of ChessVault can't open the database afterwards.
+
 - Opening a **PGN file** the first time creates a ChessVault database next to it with the same
   name, ending in `.sqlite` (for example `Club games.pgn` gets `Club games.sqlite`). Your edits and
   new games go into that database, and **editing never changes the PGN file**. Opening the PGN file
@@ -245,6 +252,10 @@ games ended: White wins, draws and Black wins as a bar, with the average rating.
   ChessVault can't read, such as a `.2cbh` database.
 - **"could not read …"** – a ChessBase database is damaged or some of its files are missing. Keep all
   files of the database together in one folder.
+- **"database or disk is full"** or **"database is locked"** when opening an older database – the
+  update above needs more free room, or another program has the database open. Nothing is lost;
+  free some room or close the other program and open it again. A read-only database file has to be
+  made writable for the update.
 - **"could not make a database beside …"** – ChessVault can't write in that folder. Copy the
   database's files to a folder of your own and open them there.
 - **A recent file can't be opened** – it was moved or deleted. ChessVault offers to take it off

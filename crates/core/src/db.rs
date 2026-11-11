@@ -7,11 +7,13 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, ToSql, Transaction};
 
 use crate::validate;
 
-const SCHEMA: &str = "
+// The game list's columns and the games' text are in separate tables: with millions of games,
+// listing, sorting and searching then read the small table, not all the moves.
+const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS games (
     id         INTEGER PRIMARY KEY,
     event      TEXT NOT NULL,
@@ -25,8 +27,11 @@ CREATE TABLE IF NOT EXISTS games (
     white_elo  INTEGER,
     black_elo  INTEGER,
     plies      INTEGER,
-    pgn        TEXT NOT NULL,
     updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS game_text (
+    id  INTEGER PRIMARY KEY,
+    pgn TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS revisions (
     id       INTEGER PRIMARY KEY,
@@ -38,14 +43,48 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS games_white ON games(white);
-CREATE INDEX IF NOT EXISTS games_black ON games(black);
 CREATE INDEX IF NOT EXISTS revisions_game ON revisions(game_id);
 ";
 
 const INSERT_GAME: &str = "INSERT INTO games
-     (event, site, date, round, white, black, result, eco, white_elo, black_elo, plies, pgn, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+     (event, site, date, round, white, black, result, eco, white_elo, black_elo, plies, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+
+const INSERT_TEXT: &str = "INSERT INTO game_text (id, pgn) VALUES (?1, ?2)";
+
+/// The columns the game list can be sorted by, other than the number.
+const SORTED: [SortColumn; 11] = [
+    SortColumn::White,
+    SortColumn::WhiteElo,
+    SortColumn::Black,
+    SortColumn::BlackElo,
+    SortColumn::Result,
+    SortColumn::Plies,
+    SortColumn::Eco,
+    SortColumn::Event,
+    SortColumn::Site,
+    SortColumn::Round,
+    SortColumn::Date,
+];
+
+/// An index for sorting by each column, so a page of a sorted list doesn't sort every game.
+fn sort_indexes() -> String {
+    SORTED
+        .iter()
+        .map(|&column| {
+            let order = Order { column, descending: false };
+            format!("CREATE INDEX IF NOT EXISTS games_by_{} ON games({}, id);\n", order.name(), order.key())
+        })
+        .collect()
+}
+
+/// Adds `pgn` to the database under `headers` and returns its new id.
+fn insert_game(conn: &Connection, headers: &Headers, pgn: &str) -> Result<i64> {
+    conn.prepare_cached(INSERT_GAME)?.execute(headers.insert_params().as_slice())?;
+    let id = conn.last_insert_rowid();
+    conn.prepare_cached(INSERT_TEXT)?.execute(params![id, pgn])?;
+    Ok(id)
+}
 
 const SUMMARY_COLUMNS: &str = "id, event, site, date, round, white, black, result, eco, white_elo, black_elo, plies";
 
@@ -146,6 +185,9 @@ pub fn open_path(path: &Path) -> Result<Opened> {
         }
     }
 }
+
+/// The meta key that records that the file has unused space to give back.
+const NEEDS_COMPACTING: &str = "needs_compacting";
 
 /// The meta key that records that a PGN file's games were imported into its database.
 const PGN_IMPORTED: &str = "pgn_imported";
@@ -378,8 +420,9 @@ pub struct Order {
 }
 
 impl Order {
-    fn sql(self) -> String {
-        let column = match self.column {
+    /// The column's name in the `games` table.
+    fn name(self) -> &'static str {
+        match self.column {
             SortColumn::Id => "id",
             SortColumn::White => "white",
             SortColumn::WhiteElo => "white_elo",
@@ -392,15 +435,18 @@ impl Order {
             SortColumn::Site => "site",
             SortColumn::Round => "round",
             SortColumn::Date => "date",
-        };
-        let dir = if self.descending { "DESC" } else { "ASC" };
-        // Every game has a number, and this order needs no sorting even with millions of games.
-        if matches!(self.column, SortColumn::Id) {
-            return format!("ORDER BY id {dir}");
         }
-        // PGN writes unknown values as "?" (or "????.??.??" for a date); they go last like empty ones.
-        let unknown = format!("{column} IS NULL OR {column} = '' OR CAST({column} AS TEXT) LIKE '?%'");
-        format!("ORDER BY {unknown}, {column} {dir}, id {dir}")
+    }
+
+    /// What the column is sorted by, with NULL for an unknown value. PGN writes those as "?" (or
+    /// "????.??.??" for a date); they count as unknown like empty ones. The sort indexes are built
+    /// on exactly this expression, so it must not change without them.
+    fn key(self) -> String {
+        let column = self.name();
+        match self.column {
+            SortColumn::Id | SortColumn::WhiteElo | SortColumn::BlackElo | SortColumn::Plies => column.to_string(),
+            _ => format!("(CASE WHEN {column} = '' OR substr({column}, 1, 1) = '?' THEN NULL ELSE {column} END)"),
+        }
     }
 }
 
@@ -440,14 +486,47 @@ impl Store {
     }
 
     fn from_connection(conn: Connection) -> Result<Self> {
-        conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(TABLES)?;
         let mut store = Store { conn };
         store.migrate()?;
+        store.move_text_out()?;
+        store.compact_if_needed()?;
+        store.conn.execute_batch(&sort_indexes())?;
         Ok(store)
     }
 
+    /// Moves the games' text out of the game list's table in databases made before they were
+    /// kept apart. A database of millions of games takes minutes, once.
+    fn move_text_out(&mut self) -> Result<()> {
+        let has_text = self.conn.prepare("SELECT 1 FROM pragma_table_info('games') WHERE name = 'pgn'")?.exists([])?;
+        if !has_text {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(
+            "INSERT INTO game_text (id, pgn) SELECT id, pgn FROM games;
+             DROP INDEX IF EXISTS games_white;
+             DROP INDEX IF EXISTS games_black;
+             ALTER TABLE games DROP COLUMN pgn;",
+        )?;
+        // The space the text took in `games` is still in the file, which is now twice its size.
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, '1')", params![NEEDS_COMPACTING])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Writes the file again without its unused space, if a change left some. This needs as much
+    /// free room again, in the system's temporary folder; when it fails (too little room, or another
+    /// program reading the database) the database works as it is, and the next open tries again.
+    fn compact_if_needed(&mut self) -> Result<()> {
+        if self.meta(NEEDS_COMPACTING)?.is_some() && self.conn.execute_batch("VACUUM;").is_ok() {
+            self.conn.execute("DELETE FROM meta WHERE key = ?1", params![NEEDS_COMPACTING])?;
+        }
+        Ok(())
+    }
+
     /// Adds the Elo and move count columns to databases made before they existed,
-    /// filling them in from each game's PGN.
+    /// filling them in from each game's PGN. Those databases still keep the text in `games`.
     fn migrate(&mut self) -> Result<()> {
         let has_plies = self
             .conn
@@ -483,8 +562,7 @@ impl Store {
         let games = split_games(text.trim_start_matches('\u{feff}'))?;
         let tx = self.conn.transaction()?;
         for pgn in &games {
-            let h = Headers::from_pgn(pgn)?;
-            tx.execute(INSERT_GAME, h.insert_params(pgn).as_slice())?;
+            insert_game(&tx, &Headers::from_pgn(pgn)?, pgn)?;
         }
         tx.commit()?;
         Ok(games.len())
@@ -493,12 +571,12 @@ impl Store {
     /// Makes the many writes of a conversion fast. A crash can then ruin the database, so this
     /// is only for a new file that is thrown away unless [`Store::finish_bulk_import`] is reached.
     pub fn begin_bulk_import(&mut self) -> Result<()> {
-        self.conn.execute_batch(
-            "PRAGMA journal_mode = OFF;
-             PRAGMA synchronous = OFF;
-             DROP INDEX games_white;
-             DROP INDEX games_black;",
-        )?;
+        self.conn.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;")?;
+        // Building the indexes once at the end is much faster than keeping them up to date.
+        for column in SORTED {
+            let name = Order { column, descending: false }.name();
+            self.conn.execute_batch(&format!("DROP INDEX IF EXISTS games_by_{name};"))?;
+        }
         Ok(())
     }
 
@@ -507,16 +585,13 @@ impl Store {
     pub fn import_batch(&mut self, games: &[String]) -> Result<BatchCounts> {
         let tx = self.conn.transaction()?;
         let mut counts = BatchCounts { added: 0, skipped: 0 };
-        {
-            let mut insert = tx.prepare_cached(INSERT_GAME)?;
-            for pgn in games {
-                let Ok(headers) = Headers::from_pgn(pgn) else {
-                    counts.skipped += 1;
-                    continue;
-                };
-                insert.execute(headers.insert_params(pgn).as_slice())?;
-                counts.added += 1;
-            }
+        for pgn in games {
+            let Ok(headers) = Headers::from_pgn(pgn) else {
+                counts.skipped += 1;
+                continue;
+            };
+            insert_game(&tx, &headers, pgn)?;
+            counts.added += 1;
         }
         tx.commit()?;
         Ok(counts)
@@ -524,7 +599,8 @@ impl Store {
 
     /// Ends [`Store::begin_bulk_import`]: builds the indexes and returns to safe writing.
     pub fn finish_bulk_import(&mut self) -> Result<()> {
-        self.conn.execute_batch(SCHEMA)?;
+        self.conn.execute_batch(TABLES)?;
+        self.conn.execute_batch(&sort_indexes())?;
         self.conn.execute_batch("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;")?;
         Ok(())
     }
@@ -532,15 +608,16 @@ impl Store {
     /// Adds one game and returns its id.
     pub fn add_game(&mut self, pgn: &str) -> Result<i64> {
         let pgn = single_game(pgn)?;
-        let h = Headers::from_pgn(&pgn)?;
-        self.conn.execute(INSERT_GAME, h.insert_params(&pgn).as_slice())?;
-        Ok(self.conn.last_insert_rowid())
+        let tx = self.conn.transaction()?;
+        let id = insert_game(&tx, &Headers::from_pgn(&pgn)?, &pgn)?;
+        tx.commit()?;
+        Ok(id)
     }
 
     /// Writes games as PGN, separated by blank lines: the games in `ids`, or all
     /// games when `ids` is `None`. Returns how many were written.
     pub fn export_pgn(&self, out: &mut impl Write, ids: Option<&[i64]>) -> Result<usize> {
-        let mut stmt = self.conn.prepare("SELECT id, pgn FROM games ORDER BY id")?;
+        let mut stmt = self.conn.prepare("SELECT id, pgn FROM game_text ORDER BY id")?;
         let mut rows = stmt.query([])?;
         let mut written = 0;
         while let Some(row) = rows.next()? {
@@ -581,6 +658,7 @@ impl Store {
     pub fn delete_game(&mut self, id: i64) -> Result<bool> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM revisions WHERE game_id = ?1", params![id])?;
+        tx.execute("DELETE FROM game_text WHERE id = ?1", params![id])?;
         let deleted = tx.execute("DELETE FROM games WHERE id = ?1", params![id])? > 0;
         tx.commit()?;
         Ok(deleted)
@@ -602,12 +680,7 @@ impl Store {
 
     /// Lists games in `order`.
     pub fn list(&self, order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {SUMMARY_COLUMNS} FROM games {} LIMIT ?1 OFFSET ?2",
-            order.sql()
-        ))?;
-        let rows = stmt.query_map(params![limit, offset], summary_row)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        self.page("1", &[], order, limit, offset)
     }
 
     /// Finds games where `name` appears as either player, in `order`, skipping the first `offset` matches.
@@ -618,17 +691,60 @@ impl Store {
 
     /// Finds the games that match every field set in `filter`, in `order`, skipping the first `offset`.
     pub fn search(&self, filter: &Filter, order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
-        let (condition, mut values) = filter.sql();
-        values.push(Box::new(limit));
-        values.push(Box::new(offset));
+        let (condition, values) = filter.sql();
+        self.page(&condition, &values, order, limit, offset)
+    }
+
+    /// The games that match `condition`, in `order`, skipping the first `offset`; a negative `limit`
+    /// means all. Games without a value come last either way. The whole list reads the order from
+    /// its index, so a page doesn't sort all games. A search finds its matches first and sorts
+    /// them: walking an index and checking every game would be far slower for a search that finds
+    /// few.
+    fn page(&self, condition: &str, values: &[Box<dyn ToSql>], order: Order, limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
+        let limit = if limit < 0 { i64::MAX } else { limit };
+        let dir = if order.descending { "DESC" } else { "ASC" };
+        if order.column == SortColumn::Id {
+            return self.select(condition, &format!("ORDER BY id {dir}"), values, limit, offset);
+        }
+        // A unary + keeps SQLite from using the index for the expression.
+        let key = if condition == "1" { order.key() } else { format!("+{}", order.key()) };
+        // An unknown value is NULL in the index, which sorts lowest: last going down.
+        if order.descending {
+            return self.select(condition, &format!("ORDER BY {key} DESC, id DESC"), values, limit, offset);
+        }
+        // Going up, the known values first, then the unknown ones by number.
+        let known = format!("({condition}) AND {key} IS NOT NULL");
+        let mut games = self.select(&known, &format!("ORDER BY {key} ASC, id ASC"), values, limit, offset)?;
+        let missing = limit - games.len() as i64;
+        if missing <= 0 {
+            return Ok(games);
+        }
+        let known_count = if games.is_empty() { self.count_where(&known, values)? } else { offset + games.len() as i64 };
+        let unknown = format!("({condition}) AND {key} IS NULL");
+        games.extend(self.select(&unknown, "ORDER BY id ASC", values, missing, (offset - known_count).max(0))?);
+        Ok(games)
+    }
+
+    fn select(&self, condition: &str, order_by: &str, values: &[Box<dyn ToSql>], limit: i64, offset: i64) -> Result<Vec<GameSummary>> {
         let n = values.len();
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {SUMMARY_COLUMNS} FROM games WHERE {condition} {} LIMIT ?{} OFFSET ?{n}",
-            order.sql(),
-            n - 1
-        ))?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), summary_row)?;
+        let sql =
+            format!("SELECT {SUMMARY_COLUMNS} FROM games WHERE {condition} {order_by} LIMIT ?{} OFFSET ?{}", n + 1, n + 2);
+        let mut all: Vec<&dyn ToSql> = values.iter().map(|v| v.as_ref()).collect();
+        all.push(&limit);
+        all.push(&offset);
+        #[cfg(test)]
+        sent::record(&sql, all.len());
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(all.as_slice(), summary_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn count_where(&self, condition: &str, values: &[Box<dyn ToSql>]) -> Result<i64> {
+        let all: Vec<&dyn ToSql> = values.iter().map(|v| v.as_ref()).collect();
+        let sql = format!("SELECT COUNT(*) FROM games WHERE {condition}");
+        #[cfg(test)]
+        sent::record(&sql, values.len());
+        Ok(self.conn.query_row(&sql, all.as_slice(), |r| r.get(0))?)
     }
 
     /// Returns one game with its PGN, or `None` if the id doesn't exist.
@@ -636,7 +752,8 @@ impl Store {
         let game = self
             .conn
             .query_row(
-                "SELECT id, event, date, white, black, result, pgn FROM games WHERE id = ?1",
+                "SELECT g.id, g.event, g.date, g.white, g.black, g.result, t.pgn
+                 FROM games g JOIN game_text t ON t.id = g.id WHERE g.id = ?1",
                 params![id],
                 |r| {
                     Ok(Game {
@@ -659,7 +776,7 @@ impl Store {
         let pgn = single_game(pgn)?;
         let tx = self.conn.transaction()?;
         let old: String = tx
-            .query_row("SELECT pgn FROM games WHERE id = ?1", params![id], |r| r.get(0))
+            .query_row("SELECT pgn FROM game_text WHERE id = ?1", params![id], |r| r.get(0))
             .optional()?
             .ok_or_else(|| Error::InvalidGame(format!("no game with id {id}")))?;
         tx.execute(
@@ -711,15 +828,15 @@ fn summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<GameSummary> {
 
 fn write_game(tx: &Transaction<'_>, id: i64, pgn: &str) -> Result<()> {
     let h = Headers::from_pgn(pgn)?;
-    let pgn = pgn.to_string();
-    let mut values = h.insert_params(&pgn);
+    let mut values = h.insert_params();
     values.push(&id);
     tx.execute(
         "UPDATE games SET event = ?1, site = ?2, date = ?3, round = ?4, white = ?5, black = ?6,
-             result = ?7, eco = ?8, white_elo = ?9, black_elo = ?10, plies = ?11, pgn = ?12, updated_at = ?13
-         WHERE id = ?14",
+             result = ?7, eco = ?8, white_elo = ?9, black_elo = ?10, plies = ?11, updated_at = ?12
+         WHERE id = ?13",
         values.as_slice(),
     )?;
+    tx.execute("UPDATE game_text SET pgn = ?1 WHERE id = ?2", params![pgn, id])?;
     Ok(())
 }
 
@@ -761,7 +878,7 @@ impl Headers {
     }
 
     /// The values for `INSERT_GAME`, in its order.
-    fn insert_params<'a>(&'a self, pgn: &'a String) -> Vec<&'a dyn rusqlite::ToSql> {
+    fn insert_params(&self) -> Vec<&dyn ToSql> {
         vec![
             &self.event,
             &self.site,
@@ -774,7 +891,6 @@ impl Headers {
             &self.white_elo,
             &self.black_elo,
             &self.plies,
-            pgn,
             &self.updated_at,
         ]
     }
@@ -867,6 +983,25 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// The SQL the game list sent, for tests that check how SQLite runs it.
+#[cfg(test)]
+mod sent {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SENT: RefCell<Vec<(String, usize)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub fn record(sql: &str, values: usize) {
+        SENT.with(|sent| sent.borrow_mut().push((sql.to_string(), values)));
+    }
+
+    /// The statements sent since the last call, with how many values each takes.
+    pub fn take() -> Vec<(String, usize)> {
+        SENT.with(|sent| sent.take())
+    }
 }
 
 #[cfg(test)]
@@ -1113,6 +1248,207 @@ mod tests {
     }
 
     #[test]
+    fn a_database_with_the_text_in_the_list_table_keeps_its_games_and_edits() {
+        let dir = temp_dir("move-text");
+        let path = dir.join("before.sqlite");
+        {
+            // The layout up to 2026-11-10: the text in `games`, with two name indexes.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE games (id INTEGER PRIMARY KEY, event TEXT NOT NULL, site TEXT NOT NULL,
+                     date TEXT NOT NULL, round TEXT NOT NULL, white TEXT NOT NULL, black TEXT NOT NULL,
+                     result TEXT NOT NULL, eco TEXT NOT NULL, white_elo INTEGER, black_elo INTEGER,
+                     plies INTEGER, pgn TEXT NOT NULL, updated_at INTEGER NOT NULL);
+                 CREATE INDEX games_white ON games(white);
+                 CREATE INDEX games_black ON games(black);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO games VALUES (4, 'Open', 'Prag', '2025.02.27', '1', 'Vykouk, Jan', 'Lysenko, Yuri', '1-0', 'B03', 2478, NULL, 3, ?1, 0)",
+                params![GAME_1],
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(store.get(4).unwrap().unwrap().pgn, GAME_1);
+        // The file was written again without the space the text took.
+        assert_eq!(store.meta(NEEDS_COMPACTING).unwrap(), None);
+        assert_eq!(store.list(Order::default(), 10, 0).unwrap()[0].white_elo, Some(2478));
+        let columns: Vec<String> = store
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('games')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(!columns.contains(&"pgn".to_string()), "{columns:?}");
+        let old_indexes: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('games_white', 'games_black')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old_indexes, 0);
+
+        // Saving, undoing, adding, exporting and deleting all work on the moved text.
+        store.update_pgn(4, GAME_2).unwrap();
+        assert_eq!(store.get(4).unwrap().unwrap().white, "Rakhmangulova, Anastasiya");
+        assert!(store.undo(4).unwrap());
+        assert_eq!(store.get(4).unwrap().unwrap().pgn, GAME_1);
+        let added = store.add_game(GAME_2).unwrap();
+        let mut exported = Vec::new();
+        assert_eq!(store.export_pgn(&mut exported, None).unwrap(), 2);
+        assert!(String::from_utf8(exported).unwrap().contains("Rakhmangulova"));
+        assert!(store.delete_game(added).unwrap());
+        let texts: i64 = store.conn.query_row("SELECT COUNT(*) FROM game_text", [], |r| r.get(0)).unwrap();
+        assert_eq!(texts, 1, "a deleted game's text goes too");
+        drop(store);
+        assert_eq!(Store::open(&path).unwrap().count().unwrap(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Games whose white players and Elo are `whites`, `None` meaning unknown (an empty name or "?").
+    fn store_with(whites: &[(Option<&str>, Option<i64>)]) -> Store {
+        let mut store = Store::open_in_memory().unwrap();
+        for (i, (name, elo)) in whites.iter().enumerate() {
+            let white = name.unwrap_or(if i % 2 == 0 { "" } else { "?" });
+            let elo = elo.map_or(String::new(), |e| format!("[WhiteElo \"{e}\"]\n"));
+            store.add_game(&format!("[White \"{white}\"]\n{elo}[Result \"*\"]\n\n1. e4 *")).unwrap();
+        }
+        store
+    }
+
+    #[test]
+    fn pages_of_a_sorted_list_put_unknown_values_last_across_every_page_boundary() {
+        let store = store_with(&[
+            (Some("Carla"), None),
+            (None, Some(1500)),
+            (Some("Anna"), Some(2100)),
+            (None, None),
+            (Some("Bert"), Some(1800)),
+            (Some("Anna"), None),
+        ]);
+        let by = |column, descending| Order { column, descending };
+        let all = |order: Order| store.list(order, 100, 0).unwrap().iter().map(|g| g.id).collect::<Vec<_>>();
+        assert_eq!(all(by(SortColumn::White, false)), [3, 6, 5, 1, 2, 4]);
+        assert_eq!(all(by(SortColumn::White, true)), [1, 5, 6, 3, 4, 2]);
+        assert_eq!(all(by(SortColumn::WhiteElo, false)), [2, 5, 3, 1, 4, 6]);
+        assert_eq!(all(by(SortColumn::WhiteElo, true)), [3, 5, 2, 6, 4, 1]);
+
+        // Any page size and start gives the same order.
+        for column in [SortColumn::White, SortColumn::WhiteElo, SortColumn::Id] {
+            for descending in [false, true] {
+                let order = by(column, descending);
+                let whole = all(order);
+                for limit in 1..=4 {
+                    for offset in 0..=7 {
+                        let page: Vec<i64> = store.list(order, limit, offset).unwrap().iter().map(|g| g.id).collect();
+                        let expected: Vec<i64> =
+                            whole.iter().copied().skip(offset as usize).take(limit as usize).collect();
+                        assert_eq!(page, expected, "{order:?} limit {limit} offset {offset}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_search_pages_through_its_matches_with_unknown_values_last() {
+        let store = store_with(&[(Some("Anna"), None), (Some("Bert"), Some(1800)), (Some("Annika"), Some(2000))]);
+        let filter = Filter { white: "ann".into(), ..Filter::default() };
+        let order = Order { column: SortColumn::WhiteElo, descending: false };
+        let ids = |offset| store.search(&filter, order, 1, offset).unwrap().iter().map(|g| g.id).collect::<Vec<_>>();
+        assert_eq!([ids(0), ids(1), ids(2)], [vec![3], vec![1], vec![]]);
+    }
+
+    /// How SQLite runs each statement the game list sent since the last call: its query plan.
+    fn plans_of_sent(store: &Store) -> Vec<String> {
+        sent::take()
+            .into_iter()
+            .map(|(sql, values)| {
+                // Any values do: the plan depends on the statement, not on them.
+                let values = vec!["x"; values];
+                let plan: Vec<String> = store
+                    .conn
+                    .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                    .unwrap()
+                    .query_map(rusqlite::params_from_iter(values.iter()), |r| r.get(3))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                format!("{sql} => {}", plan.join(" | "))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_whole_list_reads_its_order_from_the_sort_indexes() {
+        // Only the unknown values, so ascending sends all three statements: known, count, unknown.
+        let store = store_with(&[(None, None)]);
+        for column in SORTED {
+            for descending in [false, true] {
+                let order = Order { column, descending };
+                sent::take();
+                store.list(order, 10, 0).unwrap();
+                for plan in plans_of_sent(&store) {
+                    if plan.starts_with("SELECT COUNT") {
+                        continue;
+                    }
+                    assert!(!plan.contains("TEMP B-TREE"), "{order:?} sorts every game: {plan}");
+                    let unknown_part = plan.contains("IS NULL ORDER BY id");
+                    assert!(unknown_part || plan.contains(&format!("games_by_{}", order.name())), "{order:?}: {plan}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_search_sorts_its_matches_instead_of_walking_a_sort_index() {
+        let store = store_with(&[(Some("Anna"), Some(2000)), (Some("Bert"), None), (Some("Annika"), Some(1500))]);
+        let order = Order { column: SortColumn::WhiteElo, descending: true };
+        for filter in [
+            Filter { white: "ann".into(), ..Filter::default() },
+            Filter { result: "*".into(), ..Filter::default() },
+            Filter { min_white_elo: Some(1000), ..Filter::default() },
+        ] {
+            sent::take();
+            store.search(&filter, order, 10, 0).unwrap();
+            // Finding the matches with an index (SEARCH) is fine; walking a whole index (SCAN) isn't.
+            for plan in plans_of_sent(&store) {
+                assert!(!plan.contains("SCAN games USING INDEX"), "{filter:?}: {plan}");
+            }
+        }
+        // And the order is the same as the list's.
+        let filter = Filter { white: "ann".into(), ..Filter::default() };
+        let found: Vec<i64> = store.search(&filter, order, 10, 0).unwrap().iter().map(|g| g.id).collect();
+        assert_eq!(found, [1, 3]);
+        let ascending = Order { column: SortColumn::WhiteElo, descending: false };
+        let all = Filter { result: "*".into(), ..Filter::default() };
+        let found: Vec<i64> = store.search(&all, ascending, 10, 0).unwrap().iter().map(|g| g.id).collect();
+        assert_eq!(found, [3, 1, 2]);
+    }
+
+    #[test]
+    fn a_negative_limit_means_every_game() {
+        let store = store_with(&[(Some("Anna"), None), (None, None), (Some("Bert"), None)]);
+        let ascending = Order { column: SortColumn::White, descending: false };
+        let ids: Vec<i64> = store.list(ascending, -1, 0).unwrap().iter().map(|g| g.id).collect();
+        assert_eq!(ids, [1, 3, 2]);
+    }
+
+    #[test]
+    fn unused_space_is_given_back_once_and_the_reminder_removed() {
+        let dir = temp_dir("compact");
+        let path = dir.join("db.sqlite");
+        let store = Store::open(&path).unwrap();
+        store.set_meta(NEEDS_COMPACTING, "1").unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.meta(NEEDS_COMPACTING).unwrap(), None);
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn update_rejects_more_than_one_game() {
         let mut store = Store::open_in_memory().unwrap();
         store.import_pgn(GAME_1).unwrap();
@@ -1135,9 +1471,9 @@ mod tests {
         assert_eq!(store.search_player("A", Order::default(), 10, 0).unwrap().len(), 2);
         let indexes: i64 = store
             .conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'games_%'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'games_by_%'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(indexes, 2);
+        assert_eq!(indexes, SORTED.len() as i64);
     }
 
     #[test]

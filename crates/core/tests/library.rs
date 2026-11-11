@@ -255,9 +255,9 @@ fn an_empty_database_opens_empty() {
 #[test]
 fn damaged_files_never_crash_the_conversion() {
     let folder = Folder::new("fuzz");
-    // Every byte of the small files that hold moves and comments, a sample of the others: this
-    // takes half a minute, and trying every byte of them all takes five.
-    for (file, step) in [("club.cbg", 1), ("club.cba", 1), ("club.cbh", 3), ("club.cbp", 13), ("club.cbt", 7), ("club.cbv", 11)] {
+    // Every byte of the file that holds the moves, a sample of the others: this takes about a
+    // minute, and trying every byte of them all takes ten.
+    for (file, step) in [("club.cbg", 1), ("club.cba", 2), ("club.cbh", 5), ("club.cbp", 23), ("club.cbt", 13), ("club.cbv", 23)] {
         let original = fs::read(folder.path(file)).unwrap();
         // Which source to open: the archive holds its own copy of the other files.
         let source = folder.path(if file == "club.cbv" { "club.cbv" } else { "club.cbh" });

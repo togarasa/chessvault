@@ -128,6 +128,8 @@ function App() {
     if (chosen === null || !(await confirmConversion(chosen))) return;
     let opened: Awaited<ReturnType<typeof api.openDatabase>>;
     conversion.begin();
+    // A very large database made by an older ChessVault takes minutes the first time it opens.
+    setStatus(`Opening ${fileName(chosen)}…`);
     try {
       opened = await (create ? api.createDatabase(chosen) : api.openDatabase(chosen));
     } catch (error) {

@@ -22,8 +22,8 @@ describe("large conversions", () => {
     const question = largeConversionQuestion(200_000)!;
     expect(question).toContain("about 1 minute and");
     expect(question).toContain("about 0.2 GB");
-    expect(largeConversionQuestion(6_464_659)).toContain("about 6 minutes");
-    expect(largeConversionQuestion(6_464_659)).toContain("about 5.8 GB");
+    expect(largeConversionQuestion(6_464_659)).toContain("about 7 minutes");
+    expect(largeConversionQuestion(6_464_659)).toContain("about 6.8 GB");
   });
 
   it("say what they are doing", () => {

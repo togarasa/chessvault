@@ -17,4 +17,7 @@ export default function globalSetup() {
     stdio: "inherit",
     env: { ...process.env, CARGO_TARGET_DIR: resolve(import.meta.dirname, "../../target/e2e") },
   });
+  // Windows checks a newly built program the first time it starts, which can take longer than a
+  // test waits. Starting it once here gets that out of the way.
+  execSync(`"${FAKE_ENGINE}"`, { input: "quit\n", timeout: 120_000 });
 }

@@ -68,8 +68,17 @@ dependency-cruiser checks these rules, plus no circular imports and no unused mo
 
 ## Data
 
-- Games are stored as PGN text in SQLite, with indexed header columns (players, Elo, ECO, date,
-  moves) for lists and searches. Every edit keeps the previous version for undo.
+- Games are stored as PGN text in SQLite. The game list's columns (players, Elo, ECO, date, moves
+  and so on) are in `games` and the text in `game_text`, so lists and searches read only the small
+  table. Each sortable column has an index on its sort key, with unknown values (empty, `?`) as
+  NULL; a page of the whole list in either direction reads the index instead of sorting all
+  games, and going up reads the known values first, then the unknown ones. A search finds its
+  matches and sorts them instead (`+key` keeps SQLite off the index): walking an index and checking
+  each game is far slower when few match, and the indexes are on expressions the filters don't use.
+  Databases from before 2026-11-11 have the text in `games`; opening one moves it out in one
+  transaction and then compacts the file (`VACUUM`). A compaction that fails is recorded in `meta`
+  (`needs_compacting`) and tried again at the next open; it never stops the database opening.
+  Every edit keeps the previous version for undo.
 - Opening a `.pgn` file creates a `.sqlite` database beside it the first time and records in its
   `meta` table that the PGN was imported, so it is never imported twice. Editing never changes the
   PGN file; only "Save as new game" into an existing PGN file appends to it.

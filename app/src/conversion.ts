@@ -2,9 +2,9 @@ import { ConversionProgress } from "./types";
 
 /// From here on a conversion takes long and makes a large file, so it asks first.
 const LARGE_CONVERSION_GAMES = 200_000;
-// Measured on a database of 6.4 million games: 5.8 GB in about 6 minutes.
-const BYTES_PER_GAME = 900;
-const GAMES_PER_MINUTE = 1_100_000;
+// Measured on a database of 6.4 million games: 6.8 GB in about 6½ minutes.
+const BYTES_PER_GAME = 1056;
+const GAMES_PER_MINUTE = 1_000_000;
 
 /// What the conversion is doing now.
 export function conversionStepText({ done, total }: ConversionProgress) {

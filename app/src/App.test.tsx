@@ -151,6 +151,7 @@ describe("converting a file", () => {
     const { finish } = await startOpening();
     expect(screen.queryByRole("dialog", { name: "Converting" })).toBeNull();
 
+    expect(status()).toBe("Opening club.cbh…");
     act(() => conversionProgress({ done: 50000, total: 100000 }));
     const dialog = screen.getByRole("dialog", { name: "Converting" });
     expect(dialog.textContent).toContain("50%");
@@ -221,7 +222,7 @@ describe("converting a file", () => {
     vi.mocked(api.gamesToConvert).mockResolvedValue(6_000_000);
     vi.mocked(api.chooseFileToOpen).mockResolvedValueOnce("C:\\games\\big.cbh");
     await userEvent.click(button("Open…"));
-    expect((await screen.findByText(/makes a new file of about 5\.4 GB/)).textContent).toContain("about 6 minutes");
+    expect((await screen.findByText(/makes a new file of about 6\.3 GB/)).textContent).toContain("about 6 minutes");
     await userEvent.click(button("Cancel"));
     expect(api.openDatabase).not.toHaveBeenCalled();
 
