@@ -26,15 +26,15 @@ analyse with Stockfish, use the Lichess explorer, and later import from Chess.co
 | Open `.cbh` databases and `.cbv` archives in the app: converted once beside the original, with progress, cancel and a warning for very large files ([review](reviews/2026-11-08-open-cbh-files.md)). The database is `<name>.cbh.sqlite`, not `<name>.sqlite` as planned, so that `Club.pgn` and `Club.cbh` in one folder can't mix. Checked with `MyPGNDownloads.cbh` (1,584 games, none left out, same text as `convert`) and a database of 6.4 million games (6 minutes, 5.8 GB, 563 left out) | 2026-11-08 | `a66732d` |
 | Game window extras: flip the board (button, F), evaluation bar, click an engine line to play it, keys Ctrl+S and Delete ([review](reviews/2026-11-09-game-window-extras.md)) | 2026-11-09 | `51ad330` |
 | Very large databases: game text apart from the list's columns, an index for each sort column; on 6.4 million games a sorted page takes 0.1 s instead of up to 58 s, searches 0.5–1.2 s ([review](reviews/2026-11-11-very-large-databases.md)) | 2026-11-11 | `48554a0` |
+| Null moves and Chess960: games with a null move or a Chess960 start are kept, shown and analysed; a database of 6.4 million games now converts with none left out ([review](reviews/2026-11-11-null-moves-and-chess960.md)) | 2026-11-11 | `631a345` |
 
 ## Next
 
-1. **Null moves and Chess960** — added 2026-11-08, for the same reason: 563 of those games were left out (549 with a null move `--`, 14 Chess960). Accept and show them. Databases already converted keep leaving them out until converted again.
-2. **Ribbon** — the toolbar grouped into tabs (File, Home, Analysis, Lichess).
-3. **Linux build and CI** — GitHub Actions: tests on Windows and Linux on every push; Linux e2e approach to be decided (WebView2 debugging is Windows-only).
-4. **First release (v0.1.0)** — Windows installer and Linux packages, README with install guide, legal review of the EU database right and trademarks before the public release.
-5. **More online sources** — a Lichess player's games; Chess.com game import.
-6. **Android version** — added 2026-11-07 at the user's request. Tauri 2 builds Android apps, so the
+1. **Ribbon** — the toolbar grouped into tabs (File, Home, Analysis, Lichess).
+2. **Linux build and CI** — GitHub Actions: tests on Windows and Linux on every push; Linux e2e approach to be decided (WebView2 debugging is Windows-only).
+3. **First release (v0.1.0)** — Windows installer and Linux packages, README with install guide, legal review of the EU database right and trademarks before the public release.
+4. **More online sources** — a Lichess player's games; Chess.com game import.
+5. **Android version** — added 2026-11-07 at the user's request. Tauri 2 builds Android apps, so the
    Rust core is reused; the work is a touch-friendly layout, Android's file picker (storage access
    framework), and Stockfish packaged inside the app for each processor type instead of a path the
    user types.
@@ -44,15 +44,15 @@ analyse with Stockfish, use the Lichess explorer, and later import from Chess.co
      licence: ads without a closed SDK (e.g. a simple banner loaded as web content), a paid Play
      Store version, or donations. EU rules apply too: tracking ads need GDPR consent, and the Play
      Store needs a data-safety entry.
-7. **iPhone version (maybe)** — after Android. Needs an Apple developer account (about €99 a year)
+6. **iPhone version (maybe)** — after Android. Needs an Apple developer account (about €99 a year)
    and a Mac to build. iOS doesn't allow starting other programs, so the engine must be built into
    the app as a library.
-8. **macOS version (maybe)** — added 2026-11-07 at the user's request. Tauri builds macOS apps from
+7. **macOS version (maybe)** — added 2026-11-07 at the user's request. Tauri builds macOS apps from
    the same code, and GitHub Actions has free macOS machines for public repositories, so no Mac is
    needed to build it. Without Apple's signing and notarisation (the same developer account as the
    iPhone version) macOS warns that the app is from an unknown developer. The app runs in WebKit
    there, so the Windows-only e2e approach needs a replacement, as for Linux.
-9. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
+8. **Later** — dockable panes, themes, Lichess token in the system keychain instead of a file.
 
 ## Known issues
 
